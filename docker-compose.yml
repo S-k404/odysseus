@@ -81,8 +81,12 @@ services:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
     depends_on:
+      # service_started (not service_healthy): don't block Odysseus's boot on
+      # SearXNG's healthcheck — they start in parallel and Odysseus comes up
+      # ~10-20s sooner. Worst case a web search in the first seconds after
+      # boot fails once while SearXNG finishes starting.
       searxng:
-        condition: service_healthy
+        condition: service_started
       chromadb:
         condition: service_started
     restart: unless-stopped

@@ -729,7 +729,11 @@ class ResearchHandler:
                 temperature=0,
                 max_tokens=5,
                 headers=headers,
-                timeout=15,
+                # 15s was too short for on-demand model servers (e.g. Docker
+                # Model Runner, Ollama) that load weights into memory on the
+                # first request — large local models can take ~60s+ to load,
+                # so the probe timed out before the model ever answered.
+                timeout=120,
                 max_retries=1,
             )
             logger.info(f"Endpoint probe OK: {model}")
