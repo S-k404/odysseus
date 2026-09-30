@@ -74,7 +74,12 @@ _BUILTIN_SERVERS = {
     "memory":     ("mcp_servers/memory_server.py",     "Built-in: Memory"),
     "rag":        ("mcp_servers/rag_server.py",        "Built-in: RAG"),
     "email":      ("mcp_servers/email_server.py",      "Built-in: Email"),
+    "notion":     ("mcp_servers/notion_server.py",     "Built-in: Notion (read-only)"),
 }
+
+# Built-in servers that need a credential and are skipped when it is unset:
+# server id -> environment variable that must be non-empty.
+_BUILTIN_REQUIRES_ENV = {"notion": "NOTION_TOKEN"}
 
 # NPX-based built-in servers (run via npx, not Python)
 _BUILTIN_NPX_SERVERS = {
@@ -190,6 +195,10 @@ async def register_builtin_servers(mcp_manager):
             logger.warning(f"Built-in MCP server {name} error: {type(e).__name__}: {e}")
 
     for server_id, (script, name) in _BUILTIN_SERVERS.items():
+        required_env = _BUILTIN_REQUIRES_ENV.get(server_id)
+        if required_env and not os.environ.get(required_env, "").strip():
+            logger.info(f"Built-in MCP server skipped (set {required_env} to enable): {name}")
+            continue
         script_path = os.path.join(base_dir, script)
         if not os.path.exists(script_path):
             logger.warning(f"Built-in MCP server script not found: {script_path}")

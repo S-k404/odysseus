@@ -89,6 +89,8 @@ services:
       # Find yours with:  id -u  /  id -g
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+      # Optional: enables the read-only Notion tool (see integrations/notion/README.md).
+      - NOTION_TOKEN=${NOTION_TOKEN:-}
     depends_on:
       searxng:
         condition: service_healthy
