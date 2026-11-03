@@ -34,15 +34,15 @@ the memory guard, the menu bar item, the Projects page and Claude-style welcome
 and composer polish, Antigravity support, MCP discovery without ChromaDB, and
 Ollama unload on switch. Details are in `MAC_APP_STATUS.md`.
 
-**Not ours, left uncommitted on purpose.** Another session has work in progress
-in this folder. Do not commit, revert or "clean up" these without the owner:
-- `src/constants.py` (`MAX_MCP_OUTPUT_CHARS`), `src/mcp_manager.py` (cuts one MCP
-  result at 100k characters), `src/context_compactor.py` (shrinks oversized tool
-  results before dropping anything else) and `tests/test_oversized_tool_results.py`.
-  Those 8 tests pass.
-- `mcp_servers/game_save_server.py`, `mcp_servers/GAME_SAVES_STATUS.md`,
-  `mcp_servers/game_save_server.py.pre-es3`, `mcp_servers/game_saves_dev/`.
-- `workspace/` and `swift/odysseus-macos` are generated and stay untracked.
+**Another session's work.** It committed its oversized-MCP-result change to this
+branch itself (`c35e9cec`: `MAX_MCP_OUTPUT_CHARS` in `src/constants.py`, a 100k
+character cut in `src/mcp_manager.py`, shrinking of oversized tool results in
+`src/context_compactor.py`, and `tests/test_oversized_tool_results.py`). Still
+uncommitted and not ours, so leave them for the owner: `mcp_servers/game_save_server.py`,
+`mcp_servers/GAME_SAVES_STATUS.md`, `mcp_servers/game_save_server.py.pre-es3` and
+`mcp_servers/game_saves_dev/`. `workspace/` and `swift/odysseus-macos` are
+generated and stay untracked. Check `git log` before editing `llm_core.py` or
+`context_compactor.py`: two sessions commit to this branch.
 
 **Open, in the order the owner would feel them:**
 1. The installed app predates the window-position memory
