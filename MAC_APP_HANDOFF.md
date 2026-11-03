@@ -94,8 +94,8 @@ scripts/dev/scratch_server.sh stop
   `/Applications/Google Chrome.app`.
 - The scratch server uses its own data dir and no auth, so it doesn't collide
   with the Mac app on 7860.
-- Tests: `.venv/bin/python -m pytest -q` (6035 passed, 3 skipped at the
-  last full run, before the Ollama tests). Quick set for model work:
+- Tests: `.venv/bin/python -m pytest -q` (6046 passed, 3 skipped at the
+  last full run, about 3 minutes). Quick set for model work:
   `tests/test_docker_model_runner.py tests/test_model_sort_js.py
   tests/test_model_routes.py tests/test_startup_session_bootstrap_js.py`.
 - Some tests read the real `data/`. Per `tests/TESTING_STANDARD.md`, stub local
