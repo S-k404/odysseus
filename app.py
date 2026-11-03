@@ -1053,10 +1053,16 @@ async def _startup_event():
     webhook_manager.set_loop(asyncio.get_running_loop())
     # Unload local models if macOS memory pressure goes critical (a failed reply
     # beats a frozen Mac). No-op off macOS.
-    from src import memory_guard, docker_model_runner as _dmr
+    from src import memory_guard, docker_model_runner as _dmr, ollama_runner as _ollama
     if memory_guard.enabled():
+        async def _resident_anywhere():
+            return await _dmr.resident_models_default() + await _ollama.resident_models()
+
+        async def _unload_everywhere():
+            return await _dmr.unload_all() + await _ollama.unload_all()
+
         app.state._memory_guard_task = asyncio.create_task(
-            memory_guard.watch(_dmr.unload_all, _dmr.resident_models_default)
+            memory_guard.watch(_unload_everywhere, _resident_anywhere)
         )
     # Wipe any leftover incognito sessions from previous process — they're
     # ephemeral by design and must not survive a restart.
