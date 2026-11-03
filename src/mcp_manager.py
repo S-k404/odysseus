@@ -11,6 +11,7 @@ import os
 import re
 import asyncio 
 from typing import Any, Dict, List, Optional, Set, Tuple
+from src.constants import MAX_MCP_OUTPUT_CHARS
 from src.database import McpServer, SessionLocal
 
 from src.runtime_paths import get_app_root
@@ -523,6 +524,15 @@ class McpManager:
                 output_parts.append(str(content.data))
 
         output = "\n".join(output_parts)
+        if len(output) > MAX_MCP_OUTPUT_CHARS:
+            # Nothing else bounds this: the text goes to the chat UI, the saved session and the
+            # model. REA alone returned 3.7 MB for a 3000-file archive.
+            total = len(output)
+            output = (
+                output[:MAX_MCP_OUTPUT_CHARS]
+                + f"\n... (truncated by Odysseus: {total:,} characters in total; "
+                "ask the tool for a narrower result)"
+            )
         is_error = getattr(result, 'isError', False)
 
         result_dict = {

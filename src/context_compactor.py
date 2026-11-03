@@ -221,10 +221,57 @@ def _truncate_message_to_token_budget(msg: Dict[str, Any], token_budget: int) ->
     return _truncate_tool_call_args(out, token_budget)
 
 
+# A tool result (an MCP server, bash, a web fetch) is the usual reason a request goes over
+# budget. Each one may take at most this share of the input budget before anything else is cut.
+TOOL_RESULT_BUDGET_SHARE = 0.25
+_MIN_TOOL_RESULT_TOKENS = 1000
+
+
+def _truncate_tool_result_text(text: str, token_budget: int) -> str:
+    """Keep the start and end of an oversized tool result, with a notice the model can act on."""
+    max_chars = max(200, int((token_budget - 16) / 0.3))
+    if len(text) <= max_chars:
+        return text
+    notice = (
+        f"\n\n[Odysseus shortened this tool result from {len(text):,} to about {max_chars:,} "
+        "characters to fit the model's context window. If the part that was cut matters, ask for "
+        "a narrower result: a summary, one path or one item.]\n\n"
+    )
+    keep_chars = max(200, max_chars - len(notice))
+    head_len = int(keep_chars * 0.75)
+    return text[:head_len].rstrip() + notice + text[-(keep_chars - head_len):].lstrip()
+
+
+def _shrink_oversized_tool_results(messages: List[Dict], budget: int) -> List[Dict]:
+    """Shorten tool results above their share of ``budget``; return ``messages`` itself if none.
+
+    Without this, one huge result forces the later stages to drop the memory/RAG messages,
+    cut the system prompt to 2000 characters and discard older turns, including the assistant
+    turn that owns the result, which then orphans and removes the result too.
+    """
+    cap = max(_MIN_TOOL_RESULT_TOKENS, int(budget * TOOL_RESULT_BUDGET_SHARE))
+    out: List[Dict] = []
+    changed = False
+    for msg in messages:
+        content = msg.get("content")
+        if (
+            msg.get("role") == "tool"
+            and not msg.get("_protected")
+            and isinstance(content, str)
+            and _message_text_token_estimate(content) > cap
+        ):
+            out.append({**msg, "content": _truncate_tool_result_text(content, cap)})
+            changed = True
+        else:
+            out.append(msg)
+    return out if changed else messages
+
+
 def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: int = 512) -> List[Dict]:
     """Trim system messages to fit within context_length.
 
     For small-context models, progressively strips:
+    0. Oversized tool results (shortened to their share of the budget, nothing else touched)
     1. RAG/memory system messages (keep preset system prompt)
     2. Older conversation turns
     Reserves space for the response.
@@ -235,6 +282,14 @@ def trim_for_context(messages: List[Dict], context_length: int, reserve_tokens: 
         return messages
 
     logger.info(f"Trimming messages: {used} tokens > {budget} budget (ctx={context_length})")
+
+    shrunk = _shrink_oversized_tool_results(messages, budget)
+    if shrunk is not messages:
+        messages = shrunk
+        used = estimate_tokens(messages)
+        logger.info(f"Shortened oversized tool results: now {used} tokens")
+        if used <= budget:
+            return messages
 
     # Separate system messages from conversation.
     # Messages marked _protected (e.g. active document) are never trimmed.
