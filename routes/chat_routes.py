@@ -477,6 +477,34 @@ def _endpoint_cache_contains_model(endpoint, model: str) -> bool:
     return wanted in {str(item).strip() for item in models}
 
 
+def _endpoint_claims_image_model(endpoint, model: str, endpoints) -> bool:
+    """Whether an image-typed endpoint that the session's URL matches owns ``model``.
+
+    One Docker Model Runner serves chat and image models from the same base URL, so it can
+    be registered twice: a chat endpoint and an image endpoint. The image endpoint's model
+    cache then lists the whole server, chat models included, so "the cache contains the
+    model" would send every chat on that server to image generation. When an enabled chat
+    endpoint shares the base URL, only models pinned to the image endpoint count.
+    """
+    wanted = (model or "").strip()
+    base = _normalize_base(getattr(endpoint, "base_url", "") or "").rstrip("/")
+    shares_server = any(
+        other is not endpoint
+        and getattr(other, "is_enabled", True)
+        and (getattr(other, "model_type", None) or "llm") != "image"
+        and _normalize_base(getattr(other, "base_url", "") or "").rstrip("/") == base
+        for other in endpoints
+    )
+    if not shares_server:
+        return _endpoint_cache_contains_model(endpoint, model)
+    raw = getattr(endpoint, "pinned_models", None)
+    try:
+        pinned = json.loads(raw) if isinstance(raw, str) and raw else (raw or [])
+    except Exception:
+        pinned = []
+    return isinstance(pinned, list) and wanted in {str(item).strip() for item in pinned}
+
+
 def _is_image_generation_session(sess, owner: str | None = None) -> bool:
     """Whether this chat session should bypass text chat and generate images.
 
@@ -506,7 +534,7 @@ def _is_image_generation_session(sess, owner: str | None = None) -> bool:
                 continue
             if not _session_url_matches_endpoint(endpoint_url, getattr(endpoint, "base_url", "") or ""):
                 continue
-            if _endpoint_cache_contains_model(endpoint, model):
+            if _endpoint_claims_image_model(endpoint, model, endpoints):
                 return True
     except Exception:
         return False
