@@ -383,7 +383,7 @@ export function capture(opts = {}) {
       <div class="modal-content" style="width:min(560px,94vw);">
         <div class="modal-header">
           <h4>Draw your signature</h4>
-          <button class="sig-close modal-close" title="Close">×</button>
+          <button class="sig-close modal-close" title="Close" aria-label="Close signature dialog"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
         </div>
         <div class="modal-body">
           <canvas class="sig-canvas" width="900" height="280" data-no-swipe-dismiss></canvas>
@@ -476,7 +476,7 @@ export function pick(opts = {}) {
       <div class="modal-content" style="width:min(560px,94vw);">
         <div class="modal-header">
           <h4>Choose a signature</h4>
-          <button class="sig-close modal-close" title="Close">×</button>
+          <button class="sig-close modal-close" title="Close" aria-label="Close signature dialog"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
         </div>
         <div class="modal-body">
           <button class="sig-new-tile confirm-btn confirm-btn-primary" style="width:100%;margin-bottom:12px;padding:8px;">+ Draw new signature</button>

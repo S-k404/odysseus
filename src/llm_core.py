@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import HTTPException
 from typing import Optional, Dict, List, Tuple
 from src.model_context import get_context_length, DEFAULT_CONTEXT, is_local_endpoint
+from src.docker_model_runner import load_block_reason, unload_other_models as unload_other_runner_models
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,10 @@ async def _local_model_slot(target_url: str, model: str, workload: Optional[str]
             "model": model,
             "started": time.time(),
         })
+        # Holding the lock means no other Odysseus call is generating, so the
+        # previous model can be freed before this one loads (Docker Model
+        # Runner otherwise keeps both resident and macOS starts swapping).
+        await unload_other_runner_models(target_url, model)
         yield
     finally:
         if kind == "foreground":
@@ -138,6 +143,23 @@ async def _local_model_slot(target_url: str, model: str, workload: Optional[str]
             if owner is current_task:
                 _LOCAL_MODEL_CURRENT.clear()
             _LOCAL_MODEL_LOCK.release()
+
+
+async def release_local_models(endpoint_urls: List[str], keep: str = "") -> Dict[str, object]:
+    """Unload Docker Model Runner models other than ``keep`` right away.
+
+    Called when the user switches model or starts a new chat, so the previous
+    model's RAM is freed at once instead of at the next request. Skipped while
+    Odysseus is generating with a local model, since unloading could cut that
+    reply off; the next request's slot unloads the leftovers instead.
+    """
+    if _LOCAL_MODEL_LOCK.locked() or _LOCAL_MODEL_WAITING_FOREGROUND:
+        return {"unloaded": [], "skipped": "busy"}
+    unloaded: List[str] = []
+    async with _LOCAL_MODEL_LOCK:
+        for url in endpoint_urls:
+            unloaded += await unload_other_runner_models(url, keep)
+    return {"unloaded": unloaded}
 
 class LLMConfig:
     """Configuration constants for LLM operations."""
@@ -552,6 +574,12 @@ def _set_cached_response(
 # ── Anthropic native API adapter ──
 
 ANTHROPIC_MODELS = [
+    "claude-3-7-sonnet-20250219", "claude-3-7-sonnet",
+    "claude-3-5-sonnet-20241022", "claude-3-5-sonnet",
+    "claude-3-5-haiku-20241022", "claude-3-5-haiku",
+    "claude-3-opus-20240229", "claude-3-opus",
+    "claude-3-sonnet-20240229",
+    "claude-3-haiku-20240307",
     "claude-opus-4-20250514", "claude-opus-4",
     "claude-sonnet-4-20250514", "claude-sonnet-4", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5",
     "claude-haiku-4-20250514", "claude-haiku-4", "claude-haiku-3-5-20241022", "claude-haiku-3-5",
@@ -1524,7 +1552,7 @@ def _convert_openai_content_to_anthropic(content):
     return converted
 
 
-def _build_anthropic_payload(model, messages, temperature, max_tokens, stream=False, tools=None):
+def _build_anthropic_payload(model, messages, temperature, max_tokens, stream=False, tools=None, thinking_budget=None, reasoning_effort=None):
     """Convert OpenAI-style messages to Anthropic format."""
     system_parts = []
     chat_messages = []
@@ -1575,9 +1603,26 @@ def _build_anthropic_payload(model, messages, temperature, max_tokens, stream=Fa
         "messages": chat_messages,
         "max_tokens": max_tokens if max_tokens and max_tokens > 0 else 4096,
     }
-    # Opus 4.7+ removed the sampling parameters — sending `temperature` (even 0.0)
-    # returns HTTP 400. Omit it for those models; older Claude models still take it.
-    if not _anthropic_rejects_temperature(model):
+    # Extended thinking for Claude (supported on Claude 3.7+ and thinking-capable models)
+    effective_budget = None
+    if thinking_budget:
+        try:
+            effective_budget = int(thinking_budget)
+        except (ValueError, TypeError):
+            pass
+    if not effective_budget and reasoning_effort and str(reasoning_effort).lower() != "none":
+        effort_map = {"low": 2048, "medium": 8192, "high": 16384, "max": 64000}
+        effective_budget = effort_map.get(str(reasoning_effort).lower())
+    if effective_budget and effective_budget > 0:
+        payload["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": effective_budget,
+        }
+        current_max = payload.get("max_tokens") or 4096
+        if current_max <= effective_budget:
+            payload["max_tokens"] = effective_budget + 4096
+        payload["temperature"] = 1.0
+    elif not _anthropic_rejects_temperature(model):
         payload["temperature"] = temperature
     if system_parts:
         system_text = "\n\n".join(system_parts)
@@ -2402,6 +2447,10 @@ async def llm_call_async(
 
     if _is_host_dead(target_url):
         raise HTTPException(503, f"Upstream {_host_key(target_url)} marked unreachable (cooldown active)")
+    # Refuse local models whose backend would grab most of the Mac's RAM.
+    blocked = await asyncio.to_thread(load_block_reason, target_url, model)
+    if blocked:
+        raise HTTPException(409, blocked)
 
     call_timeout = _call_timeout(timeout)
     attempt = 0
@@ -2560,8 +2609,14 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
                      max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None,
                      timeout: int = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
                      tools: Optional[List[Dict]] = None, session_id: Optional[str] = None,
-                     tool_choice_none: bool = False, workload: str = "foreground"):
+                     tool_choice_none: bool = False, workload: str = "foreground",
+                     reasoning_effort: Optional[str] = None, thinking_budget: Optional[int] = None):
     target_url = _stream_target_url(url)
+    # Refuse local models whose backend would grab most of the Mac's RAM.
+    blocked = await asyncio.to_thread(load_block_reason, target_url, model)
+    if blocked:
+        yield f'event: error\ndata: {json.dumps({"error": blocked, "status": 409})}\n\n'
+        return
     async with _local_model_slot(target_url, model, workload):
         async for chunk in _stream_llm_inner(
             url,
@@ -2575,6 +2630,8 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
             tools=tools,
             session_id=session_id,
             tool_choice_none=tool_choice_none,
+            reasoning_effort=reasoning_effort,
+            thinking_budget=thinking_budget,
         ):
             yield chunk
 
@@ -2583,7 +2640,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                             max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None,
                             timeout: int = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
                             tools: Optional[List[Dict]] = None, session_id: Optional[str] = None,
-                            tool_choice_none: bool = False):
+                            tool_choice_none: bool = False,
+                            reasoning_effort: Optional[str] = None, thinking_budget: Optional[int] = None):
     """Stream LLM responses with improved error handling.
 
     Yields SSE chunks:
@@ -2612,7 +2670,11 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
     if provider == "anthropic":
         target_url = _normalize_anthropic_url(url)
         h = _build_anthropic_headers(headers)
-        payload = _build_anthropic_payload(model, messages_copy, temperature, max_tokens, stream=True, tools=tools)
+        payload = _build_anthropic_payload(
+            model, messages_copy, temperature, max_tokens,
+            stream=True, tools=tools,
+            thinking_budget=thinking_budget, reasoning_effort=reasoning_effort,
+        )
     elif provider == "ollama":
         target_url = _normalize_ollama_url(url)
         h = {"Content-Type": "application/json"}
@@ -2645,16 +2707,18 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
             payload["tools"] = _alias_harmony_tools(tools, model)
         elif tool_choice_none:
             payload["tool_choice"] = "none"
-        # Mistral thinking-capable models — send reasoning_effort so Mistral
-        # activates thinking mode and returns structured reasoning_content.
-        # Effort level is configurable via ODYSSEUS_MISTRAL_REASONING_EFFORT
-        # (high / medium / low / none); default "high".
-        if provider == "mistral" and _supports_thinking(model):
+        # Reasoning effort: OpenAI, Mistral, Ollama, and local thinking models
+        if reasoning_effort and str(reasoning_effort).lower() != "none":
+            payload["reasoning_effort"] = str(reasoning_effort).lower()
+            if _is_ollama_openai_compat_url(url) or _supports_thinking(model):
+                payload["think"] = True
+        elif reasoning_effort and str(reasoning_effort).lower() == "none":
+            payload["reasoning_effort"] = "none"
+            if _is_ollama_openai_compat_url(url) or _supports_thinking(model):
+                payload["think"] = False
+        elif provider == "mistral" and _supports_thinking(model):
             payload["reasoning_effort"] = _MISTRAL_REASONING_EFFORT
-        # For Ollama's OpenAI-compat /v1 endpoint with thinking models (qwen3,
-        # gemma4, etc.), suppress thinking so tool calls aren't swallowed inside
-        # <think> blocks. Ollama /v1 accepts "think": false as a top-level param.
-        if _is_ollama_openai_compat_url(url) and _supports_thinking(model):
+        elif _is_ollama_openai_compat_url(url) and _supports_thinking(model):
             payload["think"] = False
         _apply_local_cache_affinity(payload, url, session_id)
         _apply_local_generation_stability(payload, target_url, model)
@@ -2943,6 +3007,10 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                                 text = delta.get("text") or ""
                                 if text:
                                     yield f'data: {json.dumps({"delta": text})}\n\n'
+                            elif delta_type == "thinking_delta":
+                                thinking_text = delta.get("thinking") or ""
+                                if thinking_text:
+                                    yield f'data: {json.dumps({"delta": thinking_text, "thinking": True})}\n\n'
                             elif delta_type == "input_json_delta":
                                 # Accumulate tool arguments JSON
                                 idx = j.get("index", _anth_block_idx)

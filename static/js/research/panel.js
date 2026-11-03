@@ -361,7 +361,7 @@ function _buildPanelHTML() {
       <h4><span style="position:relative;top:-1px;left:6px;display:inline-flex;vertical-align:middle;">${_searchIcon}</span><span style="margin-left:6px;">Deep Research</span></h4>
       <div class="research-pane-header-actions">
         <button id="research-panel-minimize" class="modal-minimize-btn" type="button" title="Minimize"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="18" x2="19" y2="18"/></svg></button>
-        <button id="research-panel-close" class="close-btn" title="Close">&#x2716;</button>
+        <button id="research-panel-close" class="close-btn" title="Close" aria-label="Close research"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
     </div>
     <div class="modal-body research-pane-body" data-no-swipe-dismiss>

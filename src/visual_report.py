@@ -289,7 +289,11 @@ _TEMPLATE = """\
     --aurora-a: rgba(232,143,115,0.13);
     --aurora-b: rgba(232,192,90,0.09);
     --aurora-c: rgba(125,180,224,0.10);
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.4); --shadow-md: 0 4px 28px rgba(0,0,0,0.55);
+    /* Dark-mode shadows: flat black shadows make #1c1a1e cards invisible
+       against the #131214 page bg. Add a subtle 1px inner border highlight
+       so every surface has visible contrast without harsh outlines. */
+    --shadow-sm: 0 0 0 1px rgba(255,255,255,0.06), 0 1px 4px rgba(0,0,0,0.5);
+    --shadow-md: 0 0 0 1px rgba(255,255,255,0.08), 0 4px 28px rgba(0,0,0,0.65);
   }}
 }}
 
@@ -826,10 +830,16 @@ body::after {{
 
 /* ── Print ─────────────────────────────────────────── */
 @media print {{
-  .toc-sidebar, .toolbar {{ display: none !important; }}
+  /* Hide all interactive controls and UI chrome that make no sense on paper. */
+  .toc-sidebar,
+  .toolbar,
+  .img-hide-btn,
+  .img-reroll-btn,
+  .chat-cta {{ display: none !important; }}
   .layout {{ grid-template-columns: 1fr; }}
   .hero {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
 }}
+
 {category_css}
 </style>
 </head>
@@ -1760,22 +1770,31 @@ def generate_visual_report(
     headings = _extract_headings(report_markdown)
     report_html = _apply_heading_ids(report_html, headings)
 
-    # Collect all OG images from sources (skip icons, tiny images, known junk)
+    # Collect all OG images from sources (skip icons, tiny images, known junk).
+    # The DEEP_RESEARCH_ENABLE_OG_IMAGES=false env var disables this entire
+    # pipeline so reports are text/table/chart-only (no external images).
+    import os as _os
+    _og_images_enabled = _os.environ.get(
+        "DEEP_RESEARCH_ENABLE_OG_IMAGES", "true"
+    ).strip().lower() not in ("false", "0", "no", "off")
+
     _IMAGE_BLOCKLIST = {
         "cdn.shopify.com/s/files/1/0179/4388/7926/files/icon.png",
     }
     _seen_images = set()
     all_images = []
-    for s in sources:
-        img = s.get("image", "")
-        if (img and img.startswith("https://")
-            and img not in _seen_images
-            and img not in hidden_images_set
-            and not img.endswith((".svg", ".ico", ".gif"))
-            and not any(b in img for b in _IMAGE_BLOCKLIST)
-            and not _is_icon_or_logo_url(img)):
-            _seen_images.add(img)
-            all_images.append(img)
+    if _og_images_enabled:
+        for s in sources:
+            img = s.get("image", "")
+            if (img and img.startswith("https://")
+                and img not in _seen_images
+                and img not in hidden_images_set
+                and not img.endswith((".svg", ".ico", ".gif"))
+                and not any(b in img for b in _IMAGE_BLOCKLIST)
+                and not _is_icon_or_logo_url(img)):
+                _seen_images.add(img)
+                all_images.append(img)
+
 
     # Hero image = first available. data-img-url drives the per-image hide
     # button rendered by the script at the bottom of the page.
@@ -1859,7 +1878,15 @@ def generate_visual_report(
     timestamp = datetime.now().strftime("%B %d, %Y at %H:%M")
 
     # Build description for OG/meta tags (first 160 chars of plain text)
-    desc_text = re.sub(r'[#*_\[\]()]', '', report_markdown)[:160].strip()
+    # Build description for OG/meta tags — truncate at word boundary, max 160 chars.
+    desc_raw = re.sub(r'[#*_\[\]()]', '', report_markdown).strip()
+    # Strip markdown link syntax leftovers (e.g. residual "http://..." or bare URLs)
+    desc_raw = re.sub(r'https?://\S+', '', desc_raw).strip()
+    if len(desc_raw) > 155:
+        desc_text = desc_raw[:155].rsplit(' ', 1)[0].rstrip('.,;:-') + '\u2026'
+    else:
+        desc_text = desc_raw
+
     og_image_meta = ""
     if all_images:
         og_image_meta = f'<meta property="og:image" content="{html.escape(all_images[0])}">'

@@ -1571,6 +1571,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
   }
 
   export function openLibrary(opts) {
+    if (window.odysseusDismissAllModals) window.odysseusDismissAllModals('doclib-modal');
     if (_libraryOpen) {
       // Recover from stuck state: the swipe-to-dismiss in ui.js adds .hidden
       // to the modal without calling closeLibrary, so _libraryOpen can stay
@@ -1605,7 +1606,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
                the top representing the section they're in, with the tab
                strip below as sub-navigation. _switchLibTab() updates this. -->
           <h4 id="doclib-header-title"><span id="doclib-header-icon" style="vertical-align:-2px;margin-right:4px;display:inline-flex;"></span><span id="doclib-header-text">Library</span></h4>
-          <button class="close-btn" id="doclib-close">\u2716</button>
+          <button class="close-btn" id="doclib-close" aria-label="Close library"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
         </div>
         <div class="lib-tabs" id="doclib-lib-tabs" style="padding:0 10px;">
           <button class="lib-tab" data-doclib-tab="chats"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Chats</button>

@@ -6,6 +6,7 @@ import uiModule from './ui.js';
 import settingsModule from './settings.js';
 import { sortModelObjects } from './modelSort.js';
 import spinnerModule from './spinner.js';
+import { releaseLocalModels } from './localModels.js';
 
 const API_BASE = window.location.origin;
 
@@ -50,6 +51,108 @@ function _toggleFavorite(mid) {
     }
   } catch { /* sidebar not present */ }
   return i < 0; // true when now favorited
+}
+
+// ── Use Case Specialist Models Catalog & Versioning ──
+// Local models only; the picker hides any entry the endpoints don't list.
+// The MLX Coder 7B is left out: Docker's vLLM-Metal backend reserves ~90% of
+// RAM for its KV cache regardless of model size.
+export const CLAUDE_TIERS = [
+  {
+    id: 'coding',
+    name: 'Coding & Engineering',
+    desc: 'Full-stack development, algorithms, code refactoring & syntax parsing',
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`,
+    versions: [
+      { id: 'huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S', label: 'Qwen 3.6 35B MoE', tag: 'Best quality', endpoint_id: 'f6584950' },
+      { id: 'huggingface.co/unsloth/qwen3-8b-gguf:Q4_K_M', label: 'Qwen3 8B', tag: 'Faster', endpoint_id: 'f6584950' },
+    ],
+  },
+  {
+    id: 'reasoning',
+    name: 'Reasoning & Architecture',
+    desc: 'Extended thinking, formal logic, system design & complex proof',
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d97757" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
+    versions: [
+      { id: 'huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S', label: 'Qwen 3.6 35B MoE', tag: 'Best quality', endpoint_id: 'f6584950' },
+      { id: 'huggingface.co/unsloth/qwen3-8b-gguf:Q4_K_M', label: 'Qwen3 8B', tag: 'Faster', endpoint_id: 'f6584950' },
+    ],
+  },
+  {
+    id: 'agentic',
+    name: 'Agentic & Workflow Automation',
+    desc: 'Multi-step agent loops, autonomous task execution, n8n & tool orchestration',
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>`,
+    versions: [
+      { id: 'huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S', label: 'Qwen 3.6 35B MoE', tag: 'Best quality', endpoint_id: 'f6584950' },
+      { id: 'huggingface.co/unsloth/qwen3-8b-gguf:Q4_K_M', label: 'Qwen3 8B', tag: 'Faster', endpoint_id: 'f6584950' },
+    ],
+  },
+  {
+    id: 'cad',
+    name: 'CAD & 3D Modeling',
+    desc: 'Parametric enclosures, OpenSCAD scripts, STL generation & Blender meshes',
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>`,
+    versions: [
+      { id: 'huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S', label: 'Qwen 3.6 35B MoE', tag: 'Best quality', endpoint_id: 'f6584950' },
+    ],
+  },
+  {
+    id: 'pcb',
+    name: 'PCB Design & Hardware',
+    desc: 'KiCad schematics, netlist routing, JLCPCB DRC rule checks & LCSC parts',
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>`,
+    versions: [
+      { id: 'huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S', label: 'Qwen 3.6 35B MoE', tag: 'Best quality', endpoint_id: 'f6584950' },
+      { id: 'huggingface.co/unsloth/qwen3-8b-gguf:Q4_K_M', label: 'Qwen3 8B', tag: 'Faster', endpoint_id: 'f6584950' },
+    ],
+  },
+  {
+    id: 'computer_use',
+    name: 'Computer Use & Screen Vision',
+    desc: 'macOS screen recording, retina screenshots, UI visual inspection & control',
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`,
+    versions: [
+      { id: 'huggingface.co/qwen/qwen3-vl-30b-a3b-instruct-gguf:Q4_K_M', label: 'Qwen3 VL 30B', tag: 'Vision', endpoint_id: 'f6584950' },
+    ],
+  },
+  {
+    id: 'music_gen',
+    name: 'Music Gen & Neural Audio',
+    desc: 'Procedural music synthesis (synthwave, ambient), Kokoro voice & Whisper STT',
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
+    versions: [
+      { id: 'huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S', label: 'Qwen 3.6 35B MoE', tag: 'Best quality', endpoint_id: 'f6584950' },
+    ],
+  },
+  {
+    id: 'fast',
+    name: 'Fast Utility & Subtasks',
+    desc: 'Instant answers, lightweight utility, low latency & token-efficient chat',
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#14b8a6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>`,
+    versions: [
+      { id: 'huggingface.co/unsloth/qwen2.5-coder-1.5b-instruct-gguf:Q4_K_M', label: 'Qwen 2.5 Coder 1.5B', tag: 'Instant', endpoint_id: 'f6584950' },
+      { id: 'qwen2.5:1.5b', label: 'Qwen 2.5 1.5B', tag: 'Ollama', endpoint_id: 'ollama_local' },
+    ],
+  },
+];
+
+export const THINKING_EFFORT_KEY = 'odysseus-thinking-effort';
+export const THINKING_BUDGET_KEY = 'odysseus-thinking-budget';
+export const CONTEXT_MODE_KEY = 'odysseus-context-mode';
+export const CONTEXT_TOKENS_KEY = 'odysseus-context-tokens';
+
+export function getThinkingEffort() {
+  return localStorage.getItem(THINKING_EFFORT_KEY) || 'high';
+}
+export function getThinkingBudget() {
+  return parseInt(localStorage.getItem(THINKING_BUDGET_KEY) || '16384', 10);
+}
+export function getContextMode() {
+  return localStorage.getItem(CONTEXT_MODE_KEY) || '200k';
+}
+export function getContextTokens() {
+  return parseInt(localStorage.getItem(CONTEXT_TOKENS_KEY) || '200000', 10);
 }
 
 function _pickerModelKey(m) {
@@ -667,6 +770,8 @@ async function _pick(m) {
     // Remember this pick so it surfaces under "Recent" next time the picker
     // opens — the whole point of quick-switch.
     if (m && m.mid) _pushRecent(_pickerModelKey(m) || m.mid);
+    // Unload the previous local model now rather than at the next message.
+    if (m && m.mid) releaseLocalModels(m.mid);
 
     // Broadcast immediately so listeners (e.g. the tour) can advance without
     // waiting for the async session-create/PATCH that follows.
@@ -777,11 +882,209 @@ async function _pick(m) {
   btn.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
   });
+
+  // ── Claude Tabs & Views ──
+  const tabBtns = menu.querySelectorAll('.mp-tab-btn');
+  const viewTiers = document.getElementById('mp-view-tiers');
+  const viewAll = document.getElementById('mp-view-all');
+  const tiersListEl = document.getElementById('claude-tiers-list');
+  const MP_TABS = ['tiers', 'all'];
+
+  // A stale saved tab (e.g. the removed 'effort' tab) would hide every view.
+  let _activeTab = localStorage.getItem('odysseus-mp-tab');
+  if (!MP_TABS.includes(_activeTab)) _activeTab = 'tiers';
+
+  function _switchTab(tab) {
+    if (!MP_TABS.includes(tab)) tab = 'tiers';
+    _activeTab = tab;
+    localStorage.setItem('odysseus-mp-tab', tab);
+    tabBtns.forEach(b => {
+      b.classList.toggle('active', b.dataset.mpTab === tab);
+    });
+    if (viewTiers) viewTiers.classList.toggle('hidden', tab !== 'tiers');
+    if (viewAll) viewAll.classList.toggle('hidden', tab !== 'all');
+
+    if (tab === 'tiers') {
+      _renderClaudeTiers();
+    } else {
+      _populate(search ? search.value : '');
+    }
+  }
+
+  tabBtns.forEach(b => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _switchTab(b.dataset.mpTab);
+    });
+  });
+
+  // Resolve a catalog version against the live model list so a chip always
+  // carries the endpoint's real URL, and versions that aren't configured
+  // never show up as dead placeholders.
+  function _resolveTierVersion(ver, available) {
+    return available.find(m => m.mid === ver.id && m.endpointId === ver.endpoint_id)
+      || available.find(m => m.mid === ver.id)
+      || null;
+  }
+
+  function _renderClaudeTiers() {
+    if (!tiersListEl) return;
+    tiersListEl.innerHTML = '';
+
+    const currentSessionId = _deps ? _deps.getCurrentSessionId() : null;
+    const sessions = _deps ? _deps.getSessions() : [];
+    const pendingChat = _deps ? _deps.getPendingChat() : null;
+    const s = sessions.find(x => x.id === currentSessionId);
+    const activeModelId = (s && s.model) || (pendingChat && pendingChat.modelId) || '';
+    const available = _getAllModels();
+
+    CLAUDE_TIERS.forEach(tier => {
+      const versions = tier.versions
+        .map(ver => ({ ver, model: _resolveTierVersion(ver, available) }))
+        .filter(v => v.model);
+      if (!versions.length) return;
+
+      const card = document.createElement('div');
+      card.className = 'claude-tier-card';
+      card.dataset.tier = tier.id;
+
+      const header = document.createElement('div');
+      header.className = 'claude-tier-header';
+      header.innerHTML = `
+        <span class="tier-icon">${tier.icon}</span>
+        <div class="tier-text">
+          <div class="tier-name"></div>
+          <div class="tier-desc"></div>
+        </div>
+      `;
+      header.querySelector('.tier-name').textContent = tier.name;
+      header.querySelector('.tier-desc').textContent = tier.desc;
+      card.appendChild(header);
+
+      const verRow = document.createElement('div');
+      verRow.className = 'claude-tier-versions';
+
+      versions.forEach(({ ver, model }) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'tier-ver-chip';
+        chip.dataset.mid = model.mid;
+        chip.title = model.stale ? `${model.mid} — ${model.staleReason || 'offline'}` : model.mid;
+        if (activeModelId === model.mid) chip.classList.add('active');
+        if (model.stale) chip.classList.add('stale');
+
+        const label = document.createElement('span');
+        label.className = 'ver-label';
+        label.textContent = ver.label;
+        const tag = document.createElement('span');
+        tag.className = 'ver-tag';
+        tag.textContent = ver.tag;
+        chip.append(label, tag);
+
+        chip.addEventListener('click', (e) => {
+          e.stopPropagation();
+          _pick({ ...model, display: ver.label });
+        });
+
+        verRow.appendChild(chip);
+      });
+
+      card.appendChild(verRow);
+      tiersListEl.appendChild(card);
+    });
+
+    if (!tiersListEl.childElementCount) {
+      const empty = document.createElement('div');
+      empty.className = 'claude-tiers-empty';
+      empty.textContent = _hasModelCache()
+        ? 'None of the specialist models are configured. Pick one from All models.'
+        : 'Loading models…';
+      tiersListEl.appendChild(empty);
+    }
+  }
+
+  // ── Reasoning Effort & Context (composer pills are the single control) ──
+  const effortPill = document.getElementById('thinking-effort-pill');
+  const effortPillLabel = document.getElementById('thinking-effort-label');
+  const contextPill = document.getElementById('context-mode-pill');
+  const contextPillLabel = document.getElementById('context-mode-label');
+
+  const EFFORT_PRESETS = {
+    'none': { budget: 0, label: 'Off' },
+    'low': { budget: 2048, label: 'Low (2k)' },
+    'medium': { budget: 8192, label: 'Med (8k)' },
+    'high': { budget: 16384, label: 'High (16k)' },
+    'max': { budget: 64000, label: 'Extra (64k)' },
+  };
+
+  // Limits on how much history is sent. The server clamps every choice to the
+  // window the model is actually served with, so "Max" means "all of it".
+  // ('200k' stays the key for Max so stored choices keep working.)
+  const CONTEXT_PRESETS = {
+    '16k': { tokens: 16384, label: '16k' },
+    '32k': { tokens: 32768, label: '32k' },
+    '64k': { tokens: 65536, label: '64k' },
+    '200k': { tokens: 200000, label: 'Max' },
+  };
+
+  function _setEffort(effortKey, budgetVal, notify = false) {
+    if (!EFFORT_PRESETS[effortKey]) effortKey = 'high';
+    const cfg = EFFORT_PRESETS[effortKey];
+    const finalBudget = budgetVal !== undefined ? budgetVal : cfg.budget;
+    localStorage.setItem(THINKING_EFFORT_KEY, effortKey);
+    localStorage.setItem(THINKING_BUDGET_KEY, String(finalBudget));
+
+    if (effortPillLabel) effortPillLabel.textContent = `Thinking: ${cfg.label}`;
+    if (effortPill) effortPill.classList.toggle('active', effortKey !== 'none');
+    if (notify && uiModule && uiModule.showToast) {
+      uiModule.showToast(`Thinking: ${cfg.label}`);
+    }
+  }
+
+  function _setContext(ctxKey, tokenVal, notify = false) {
+    if (!CONTEXT_PRESETS[ctxKey]) ctxKey = '200k';
+    const cfg = CONTEXT_PRESETS[ctxKey];
+    const finalTokens = tokenVal !== undefined ? tokenVal : cfg.tokens;
+    localStorage.setItem(CONTEXT_MODE_KEY, ctxKey);
+    localStorage.setItem(CONTEXT_TOKENS_KEY, String(finalTokens));
+
+    if (contextPillLabel) contextPillLabel.textContent = `${cfg.label} Context`;
+    if (notify && uiModule && uiModule.showToast) {
+      uiModule.showToast(`Context: ${cfg.label}`);
+    }
+  }
+
+  // Composer pills cycle through the presets
+  if (effortPill) {
+    const cycleOrder = Object.keys(EFFORT_PRESETS);
+    effortPill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const nextIdx = (cycleOrder.indexOf(getThinkingEffort()) + 1) % cycleOrder.length;
+      _setEffort(cycleOrder[nextIdx], undefined, true);
+    });
+  }
+
+  if (contextPill) {
+    const cycleContext = Object.keys(CONTEXT_PRESETS);
+    contextPill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const nextIdx = (cycleContext.indexOf(getContextMode()) + 1) % cycleContext.length;
+      _setContext(cycleContext[nextIdx], undefined, true);
+    });
+  }
+
+  _setEffort(getThinkingEffort(), getThinkingBudget());
+  _setContext(getContextMode(), getContextTokens());
+
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (menu.classList.contains('hidden') || menu.classList.contains('closing')) {
       // Force-clear any in-progress close animation
       menu.classList.remove('closing', 'hidden');
+      // The menu opens upward; keep it inside the window when the composer
+      // sits high (welcome screen) or the window is short.
+      menu.style.maxHeight = `${Math.max(200, wrap.getBoundingClientRect().top - 24)}px`;
+      _switchTab(_activeTab);
       const hasCache = _hasModelCache();
       if (hasCache) {
         _populate('');
@@ -789,17 +1092,15 @@ async function _pick(m) {
         _renderLoading('Loading models…');
       }
       if (window.modelsModule && window.modelsModule.refreshModels) {
-        // Force the cheap /api/models cache refresh when the picker opens.
-        // This does not wait on provider probes; the backend returns cached
-        // inventory and starts refresh work separately. Without this, models
-        // enabled in Added Models can be absent from the chatbox picker until
-        // the tab's frontend cache ages out.
         _refreshPickerModels({ force: hasCache, showLoading: !hasCache }).then(() => {
-          if (!menu.classList.contains('hidden')) _populate(search.value || '');
+          if (!menu.classList.contains('hidden')) {
+            if (_activeTab === 'tiers') _renderClaudeTiers();
+            else if (_activeTab === 'all') _populate(search.value || '');
+          }
           updateModelPicker();
         }).catch(() => {});
       }
-      if (window.innerWidth >= 768) search.focus();
+      if (_activeTab === 'all' && window.innerWidth >= 768) search.focus();
       // Hide scroll button so it doesn't overlap
       const _scrollBtn = document.getElementById('scroll-bottom-btn');
       if (_scrollBtn) _scrollBtn.style.display = 'none';
@@ -810,6 +1111,7 @@ async function _pick(m) {
 
   search.addEventListener('input', () => {
     if (_pickerLoading) return;
+    if (_activeTab !== 'all') _switchTab('all');
     _populate(search.value);
   });
   search.addEventListener('click', (e) => e.stopPropagation());
@@ -842,6 +1144,13 @@ async function _pick(m) {
   }
   document.addEventListener('click', (e) => {
     if (!menu.classList.contains('hidden') && !wrap.contains(e.target)) {
+      _close();
+    }
+  });
+  // The Specialists tab doesn't focus the search box, so Escape needs a
+  // document-level hook (the search box handles its own Escape).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && e.target !== search && !menu.classList.contains('hidden')) {
       _close();
     }
   });
@@ -955,4 +1264,9 @@ export function updateModelPicker() {
   } else {
     label.textContent = displayName;
   }
+
+  // Update Claude tier chips active state if rendered
+  document.querySelectorAll('.tier-ver-chip').forEach(chip => {
+    chip.classList.toggle('active', !!modelId && chip.dataset.mid === modelId);
+  });
 }

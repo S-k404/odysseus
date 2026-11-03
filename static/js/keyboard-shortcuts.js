@@ -219,8 +219,13 @@ export function initKeyboardShortcuts(modules) {
       });
       return;
     }
-    if (_matchesCombo(e, kb.new_session)) {
+    if (_matchesCombo(e, kb.new_session) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !e.shiftKey && !e.altKey)) {
       e.preventDefault();
+      const newBtn = document.getElementById('sidebar-new-chat-btn');
+      if (newBtn) {
+        newBtn.click();
+        return;
+      }
       if (_closeCompareIfActive()) return;
       _deactivateIncognito();
       const sid = sessionModule && sessionModule.getCurrentSessionId();

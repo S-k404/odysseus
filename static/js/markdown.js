@@ -286,7 +286,7 @@ export function hasUnclosedThinkTag(text) {
 }
 
 export function startsWithReasoningPrefix(text) {
-  return /^\s*(?:thinking(?:\s+process)?\s*:|the user |user wants|we need |i need |i should |i will |i'll |i am going |let me (?:think|look|see|check|read|review|analyze|parse|figure|draft|write)|they are |the question |i can )/i.test(text || '');
+  return /^\s*(?:(?:v?iew\s+)?thinking(?:\s+process)?\s*:?|(?:thought|reasoning(?:\s+process)?|reflection|scratchpad|internal\s+monologue)\s*:?|the user |user wants|user asks|user said|we need |i need |i should |i will |i'll |i am going |i have to |i must |let me (?:think|look|see|check|read|review|analyze|parse|figure|draft|write)|they are |the question |i can |looking at |plan:\s*)/i.test(text || '');
 }
 
 export function normalizeThinkingMarkup(text) {
@@ -317,22 +317,24 @@ function normalizePlainThinking(text) {
   if (!startsWithReasoningPrefix(trimmed)) return text;
 
   const replyStarts = [
-    'Hey', 'Hi ', 'Hi!', 'Hello', 'Sure', 'Yes', 'No ', 'No,', 'Yo', 'OK',
+    'Hey', 'Hi ', 'Hi!', 'Hello', 'Sure', 'Certainly', 'Yes', 'No ', 'No,', 'Yo', 'OK',
     'Here', 'Absolutely', 'Of course', 'Great', 'Alright', 'Thanks', 'Welcome',
-    'Good ', "I'm happy", "I'd be"
+    'Good ', "I'm happy", "I'd be", 'To answer', 'In summary', 'Below is', "Here's"
   ];
-  const prefixRegex = /^(thinking(?:\s+process)?\s*:)\s*/i;
+  const prefixRegex = /^\s*(?:(?:v?iew\s+)?thinking(?:\s+process)?\s*:?|(?:thought|reasoning(?:\s+process)?|reflection|scratchpad|internal\s+monologue)\s*:?)\s*/i;
   const escapedReplyStarts = replyStarts.map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const boundaryRegex = new RegExp(
-    `^([\\s\\S]*?)(\\n\\n(?=${escapedReplyStarts.join('|')}|I |What|Let|This |As ))[\\s\\S]*$`,
+    `^([\\s\\S]*?)(\\n\\n(?=(?:${escapedReplyStarts.join('|')}|(?:Response|Reply|Answer|Final (?:Response|Answer)|Output)\\s*:|---+|===+)))[\\s\\S]*$`,
     'i'
   );
   const boundaryMatch = boundaryRegex.exec(trimmed);
 
   if (boundaryMatch) {
     const thinkBlock = boundaryMatch[1].replace(prefixRegex, '').trim();
-    const reply = trimmed.slice(boundaryMatch[1].length).trimStart();
+    let reply = trimmed.slice(boundaryMatch[1].length).trimStart();
+    reply = reply.replace(/^(?:Response|Reply|Answer|Final (?:Response|Answer)|Output)\s*:\s*/i, '');
     if (thinkBlock && reply) return `<think>${thinkBlock}</think>\n\n${reply}`;
+    if (reply) return reply;
   }
 
   const lines = trimmed.split('\n');
@@ -343,6 +345,7 @@ function normalizePlainThinking(text) {
       const thinkBlock = lines.slice(0, index).join('\n').replace(prefixRegex, '').trim();
       const reply = lines.slice(index).join('\n').trim();
       if (thinkBlock && reply) return `<think>${thinkBlock}</think>\n${reply}`;
+      if (reply) return reply;
     }
   }
 
@@ -354,12 +357,13 @@ function normalizePlainThinking(text) {
       const thinkBlock = withoutPrefix.slice(0, match.index + 1).trim();
       const reply = withoutPrefix.slice(match.index + 1).trim();
       if (thinkBlock && reply) return `<think>${thinkBlock}</think>\n${reply}`;
+      if (reply) return reply;
     }
   }
 
-  if (/^\s*(?:thinking(?:\s+process)?\s*:|the user |user wants|we need |let me (?:think|look|see|check|read|review|analyze|parse|figure|draft|write)|i need to |i should |i will |i'll |i am going )/i.test(trimmed)) {
-    const thinkBlock = withoutPrefix.trim();
-    if (thinkBlock) return `<think>${thinkBlock}</think>`;
+  const thinkBlock = withoutPrefix.trim();
+  if (thinkBlock) {
+    return `<think>${thinkBlock}</think>`;
   }
 
   return text;

@@ -38,10 +38,10 @@ _THOUGHT_TAG_CLOSE_RE = re.compile(r"</thought>", re.IGNORECASE)
 # Gemma thought-channel delimiters, split for the forward-only sub (_sub_delimited).
 _GEMMA_THOUGHT_CHANNEL_OPEN_RE = re.compile(r"<\|channel>thought\s*\n?", re.IGNORECASE)
 _GEMMA_CHANNEL_CLOSE_TRIM_RE = re.compile(r"<channel\|>\s*", re.IGNORECASE)
-# Qwen and a few other models prefix the response with a "Thinking Process:"
-# block before the real answer.
+# Qwen, MiniMax, and other models prefix the response with a "Thinking Process:"
+# or "View thinking process" block before the real answer.
 _QWEN_THINKING_RE = re.compile(
-    r"^Thinking Process:.*?(?=\n\n#|\n\n\*\*|\Z)",
+    r"^(?:(?:v?iew\s+)?thinking(?:\s+process)?\s*:?|(?:thought|reasoning(?:\s+process)?|reflection|scratchpad)\s*:?).*?(?=\n\n#|\n\n\*\*|\Z)",
     re.IGNORECASE | re.DOTALL,
 )
 # Leaked prompt-echo headers (a few models replay the request before answering).
@@ -55,10 +55,13 @@ _PROMPT_ECHO_RES = (
 # false-positives on legit user content like "Looking at the attached file…".
 _REASONING_PREFIX_RE = re.compile(
     r"^\s*(?:"
+    r"(?:v?iew\s+)?thinking(?:\s+process)?\s*:?|"
+    r"(?:thought|reasoning(?:\s+process)?|reflection|scratchpad)\s*:?|"
+    r"plan:\s*|"
     r"the user (?:wants|is|asks|needs|wrote|said|told|messaged|requested)|"
     r"i (?:need|should|have|'ll|will|am going)(?: to)? (?:write|draft|reply|respond|read|check|look|review|consider|think|provide|generate|produce|craft|compose|acknowledge|summarize|answer|give|keep|aim|make|address|focus|use|just|simply|analyze|format|create|build|note|decide)|"
     r"let me (?:think|look|see|check|read|review|consider|draft|write|analyze|format|summarize|create|produce|craft|note|extract|identify|figure)|"
-    r"looking at (?:the|this|that)|"
+    r"looking at (?:the|this|that|available)|"
     r"(?:okay|alright|hmm|right|so|well|first|next|now)[,.]?\s+(?:the|i|let|so|now|this|here)|"
     r"based on (?:the|this|what|context)|"
     r"to (?:draft|write|reply|respond|summarize|answer)"

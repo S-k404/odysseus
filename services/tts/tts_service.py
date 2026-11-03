@@ -1,6 +1,7 @@
 # src/tts_service.py
 """Multi-provider TTS service — dispatches to local Kokoro, OpenAI-compatible API, or browser."""
 
+import re
 import io
 import os
 import wave
@@ -13,6 +14,54 @@ from typing import Optional, Dict, Any
 from src.constants import TTS_CACHE_DIR
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_tts_text(text: str) -> str:
+    """Strip internal model thinking, reasoning tags, and markdown markup."""
+    if not text:
+        return ""
+    # Strip complete and unclosed <think>/<thought>/<thinking> tags
+    cleaned = re.sub(
+        r"<(?:(?:mm:)?think(?:ing)?|thought)(?:\s+[^>]*)?>[\s\S]*?(?:</(?:(?:mm:)?think(?:ing)?|thought)>|$)",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Strip channel thoughts (<|channel>thought ... <|channel>response)
+    cleaned = re.sub(
+        r"<\|channel>thought[\s\S]*?(?:<\|channel>(?:response|text)?|$)",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    # Strip prefix thinking and untagged reasoning blocks
+    reasoning_prefix_re = re.compile(
+        r"^\s*(?:(?:v?iew\s+)?thinking(?:\s+process)?\s*:?|(?:thought|reasoning(?:\s+process)?|reflection|scratchpad|internal\s+monologue)\s*:?|the user |user wants|user asks|user said|we need |i need |i should |i will |i'll |i am going |i have to |i must |let me (?:think|look|see|check|read|review|analyze|parse|figure|draft|write)|they are |the question |i can |looking at |plan:\s*)",
+        re.IGNORECASE,
+    )
+    reply_boundary_re = re.compile(
+        r"\n\n(?=(?:Hey|Hi[ !]|Hello|Sure|Certainly|Yes|No[, ]|OK|Here |Absolutely|Of course|Great|Alright|Thanks|Welcome|Good |To answer|In summary|Below is|Here's|(?:Response|Reply|Answer|Final (?:Response|Answer)|Output)\s*:|---+|===+))",
+        re.IGNORECASE,
+    )
+    trimmed = cleaned.lstrip()
+    if reasoning_prefix_re.match(trimmed):
+        match = reply_boundary_re.search(trimmed)
+        if match:
+            cleaned = trimmed[match.start() + 2:].lstrip()
+            cleaned = re.sub(r"^(?:Response|Reply|Answer|Final (?:Response|Answer)|Output)\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+        else:
+            cleaned = ""
+    # Strip tool calls
+    cleaned = re.sub(r"\[/?TOOL_CALL\][\s\S]*?(?:\[/TOOL_CALL\]|$)", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<(?:[\w]+:)?(?:tool_call|function_call)>[\s\S]*?(?:</(?:[\w]+:)?(?:tool_call|function_call)>|$)", "", cleaned, flags=re.IGNORECASE)
+    # Strip markdown headers/formatting
+    cleaned = re.sub(r"#{1,6}\s", "", cleaned)
+    cleaned = re.sub(r"\*\*(.+?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"\*(.+?)\*", r"\1", cleaned)
+    cleaned = re.sub(r"`(.+?)`", r"\1", cleaned)
+    cleaned = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def _safe_speed(value, default: float = 1.0) -> float:
@@ -53,12 +102,22 @@ class TTSService:
     def _load_settings(self) -> dict:
         from src.settings import load_settings
         saved = load_settings()
+        env_enabled = os.getenv("TTS_ENABLED")
+        tts_enabled = (env_enabled.lower() in ("true", "1", "yes")) if env_enabled is not None else saved.get("tts_enabled", True)
+        tts_provider = os.getenv("TTS_PROVIDER") or saved.get("tts_provider", "disabled")
+        tts_model = os.getenv("TTS_MODEL") or saved.get("tts_model", "tts-1")
+        tts_voice = os.getenv("TTS_VOICE") or saved.get("tts_voice", "alloy")
+        tts_speed = os.getenv("TTS_SPEED") or saved.get("tts_speed", "1")
+        openai_base = os.getenv("TTS_OPENAI_API_BASE", "")
+        openai_key = os.getenv("TTS_OPENAI_API_KEY", "")
         return {
-            "tts_enabled": saved.get("tts_enabled", True),
-            "tts_provider": saved.get("tts_provider", "disabled"),
-            "tts_model": saved.get("tts_model", "tts-1"),
-            "tts_voice": saved.get("tts_voice", "alloy"),
-            "tts_speed": saved.get("tts_speed", "1"),
+            "tts_enabled": tts_enabled,
+            "tts_provider": tts_provider,
+            "tts_model": tts_model,
+            "tts_voice": tts_voice,
+            "tts_speed": tts_speed,
+            "openai_api_base": openai_base,
+            "openai_api_key": openai_key,
         }
 
     @property
@@ -74,6 +133,8 @@ class TTSService:
         if provider == "local":
             kokoro = self._get_kokoro()
             return kokoro is not None and kokoro.available
+        if provider == "openai":
+            return bool(settings.get("openai_api_base") or os.getenv("TTS_OPENAI_API_BASE"))
         if isinstance(provider, str) and provider.startswith("endpoint:"):
             return True  # assume reachable; errors surface at synthesis time
         return False
@@ -156,6 +217,34 @@ class TTSService:
             self._kokoro = _KokoroPipeline()
         return self._kokoro
 
+    def _synthesize_openai(self, text: str, base_url: str, api_key: str, model: str, voice: str, speed: float = 1.0) -> Optional[bytes]:
+        url = base_url.rstrip("/") + "/audio/speech"
+        headers = {"Content-Type": "application/json"}
+        if api_key and api_key != "not-needed":
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        # Resolve model name alias for Speaches Kokoro
+        effective_model = model
+        if effective_model in ("hexgrad/Kokoro-82M", "kokoro", "Kokoro-82M"):
+            effective_model = "speaches-ai/Kokoro-82M-v1.0-ONNX"
+
+        payload = {
+            "model": effective_model,
+            "input": text,
+            "voice": voice,
+            "response_format": "mp3",
+            "speed": speed,
+        }
+
+        try:
+            r = httpx.post(url, json=payload, headers=headers, timeout=60)
+            r.raise_for_status()
+            logger.info(f"OpenAI TTS: {len(r.content)} bytes from {base_url}")
+            return r.content
+        except Exception as e:
+            logger.error(f"OpenAI TTS synthesis failed: {e}")
+            return None
+
     # ── API endpoint ──
 
     def _synthesize_api(self, text: str, endpoint_id: str, model: str, voice: str, speed: float = 1.0) -> Optional[bytes]:
@@ -177,8 +266,12 @@ class TTSService:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
+        effective_model = model
+        if effective_model in ("hexgrad/Kokoro-82M", "kokoro", "Kokoro-82M"):
+            effective_model = "speaches-ai/Kokoro-82M-v1.0-ONNX"
+
         payload = {
-            "model": model,
+            "model": effective_model,
             "input": text,
             "voice": voice,
             "response_format": "mp3",
@@ -208,6 +301,10 @@ class TTSService:
         if provider in ("disabled", "browser"):
             return None
 
+        text = _clean_tts_text(text)
+        if not text:
+            return None
+
         if len(text) > 5000:
             text = text[:5000]
 
@@ -227,7 +324,11 @@ class TTSService:
             else:
                 logger.warning("Kokoro TTS not available")
                 return None
-        elif provider.startswith("endpoint:"):
+        elif provider == "openai":
+            base_url = settings.get("openai_api_base") or os.getenv("TTS_OPENAI_API_BASE", "http://speaches:8000/v1")
+            api_key = settings.get("openai_api_key") or os.getenv("TTS_OPENAI_API_KEY", "")
+            audio_data = self._synthesize_openai(text, base_url, api_key, model, voice, speed)
+        elif isinstance(provider, str) and provider.startswith("endpoint:"):
             endpoint_id = provider.split(":", 1)[1]
             audio_data = self._synthesize_api(text, endpoint_id, model, voice, speed)
         else:

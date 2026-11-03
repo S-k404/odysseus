@@ -52,6 +52,14 @@ def _patch_common(monkeypatch, exec_calls):
     monkeypatch.setattr(al, "estimate_tokens", lambda *a, **k: 10, raising=False)
     # These tests exercise tool-channel parsing, not owner authorization.
     monkeypatch.setattr(al, "blocked_tools_for_owner", lambda owner: set(), raising=False)
+    # Environment-independent: don't read the developer's data/ dir. Installed
+    # skills and integration notes are injected as untrusted context, which
+    # arms the tool gate and turns these calls into approval prompts.
+    import services.memory.skills as skills_mod
+    import src.integrations as integrations_mod
+    monkeypatch.setattr(skills_mod.SkillsManager, "load", lambda self, owner=None: [])
+    monkeypatch.setattr(skills_mod.SkillsManager, "index_for", lambda self, owner=None, **kw: [])
+    monkeypatch.setattr(integrations_mod, "get_integrations_prompt", lambda *a, **k: "")
 
     async def _fake_exec(block, *a, **k):
         exec_calls.append(block)

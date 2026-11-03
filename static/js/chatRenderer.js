@@ -1653,15 +1653,38 @@ export function hideWelcomeScreen() {
   const cc = document.getElementById('chat-container');
   if (ws) ws.classList.add('hidden');
   if (cc) cc.classList.remove('welcome-active');
+  const sessBtn = document.getElementById('claude-crumb-session-btn');
+  if (sessBtn) sessBtn.style.display = 'inline-flex';
   // Update send button — switches from muted arrow to + Chat
   if (window._updateSendBtnIcon) setTimeout(window._updateSendBtnIcon, 50);
   const ib = document.getElementById('incognito-btn');
   if (ib) ib.style.display = ib.classList.contains('active') ? '' : 'none';
 }
 
+// Claude-style greeting on the new-chat screen ("Good evening, Sam"). The
+// Deep Research and Nobody screens swap this text and restore it afterwards.
+export function renderWelcomeGreeting() {
+  const wn = document.querySelector('#welcome-screen .welcome-name');
+  const boat = wn && wn.querySelector('.welcome-boat');
+  if (!boat || wn.dataset.researchOrigHtml) return;
+  const nobody = document.getElementById('incognito-toggle');
+  if (nobody && nobody.checked) return;
+  const h = new Date().getHours();
+  const part = h >= 5 && h < 12 ? 'morning' : h >= 12 && h < 18 ? 'afternoon' : 'evening';
+  const name = window._welcomeFirstName;
+  wn.replaceChildren(boat, document.createTextNode(`Good ${part}${name ? ', ' + name : ''}`));
+}
+
 export function showWelcomeScreen() {
+  renderWelcomeGreeting();
   const ws = document.getElementById('welcome-screen');
   const cc = document.getElementById('chat-container');
+  const projWrap = document.getElementById('claude-crumb-project-wrap');
+  if (projWrap) projWrap.style.display = 'none';
+  const sessBtn = document.getElementById('claude-crumb-session-btn');
+  if (sessBtn) sessBtn.style.display = 'none';
+  const stepBadge = document.getElementById('claude-step-badge');
+  if (stepBadge) stepBadge.style.display = 'none';
   const alreadyVisible = !!(ws && !ws.classList.contains('hidden'));
   if (ws) ws.classList.remove('hidden');
   if (cc) cc.classList.add('welcome-active');
@@ -3116,6 +3139,7 @@ const chatRenderer = {
   buildImageBubble,
   hideWelcomeScreen,
   showWelcomeScreen,
+  renderWelcomeGreeting,
   createMsgFooter,
   displayMetrics,
   addMessage,

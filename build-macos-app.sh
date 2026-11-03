@@ -1,16 +1,12 @@
 #!/bin/bash
-# Build a downloadable macOS launcher app + .dmg for Odysseus.
+# Build a native macOS app + .dmg for Odysseus.
 #
 #   ./build-macos-app.sh
 #
 # Produces:
-#   dist/Odysseus.app   — double-click: starts the local server (using this
-#                         repo's venv) and opens the UI in an app-style window.
-#   dist/Odysseus.dmg   — drag-to-Applications disk image (the downloadable).
-#
-# This is a *launcher* wrapper: it drives the venv we set up in this repo, it
-# does not bundle Python. The install path is baked into the app at build time,
-# so rebuild if you move the repo. Override the port with ODYSSEUS_PORT.
+#   dist/Odysseus.app   — Native macOS desktop application (Swift WKWebView + backend launcher)
+#   dist/Odysseus.dmg   — Drag-to-Applications disk image
+#   /Applications/Odysseus.app — Installed directly to Applications folder
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +16,7 @@ PORT="${ODYSSEUS_PORT:-7860}"
 DIST="$REPO_DIR/dist"
 APP="$DIST/$APP_NAME.app"
 
-echo "Building $APP_NAME.app"
+echo "Building $APP_NAME.app for macOS"
 echo "  install dir: $INSTALL_DIR"
 echo "  port:        $PORT"
 
@@ -30,9 +26,6 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # ── Icon (best effort) — center-crop the branding image to a square .icns ──
 if [ -f "$REPO_DIR/assets/branding/odysseus.jpg" ] && command -v sips >/dev/null 2>&1; then
   TMPIMG="$(mktemp -d)"
-  # Center-crop to a square, scale to 512 (sips' icns encoder caps at 512), and
-  # let sips emit the .icns directly — more robust across macOS versions than
-  # building an .iconset by hand.
   sips -c 720 720 "$REPO_DIR/assets/branding/odysseus.jpg" --out "$TMPIMG/sq.png" >/dev/null 2>&1 || cp "$REPO_DIR/assets/branding/odysseus.jpg" "$TMPIMG/sq.png"
   sips -z 512 512 "$TMPIMG/sq.png" --out "$TMPIMG/icon.png" >/dev/null 2>&1
   if sips -s format icns "$TMPIMG/icon.png" --out "$APP/Contents/Resources/odysseus.icns" >/dev/null 2>&1; then
@@ -53,7 +46,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key>            <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>     <string>$APP_NAME</string>
-    <key>CFBundleIdentifier</key>      <string>com.odysseus.launcher</string>
+    <key>CFBundleIdentifier</key>      <string>com.odysseus.desktop</string>
     <key>CFBundleVersion</key>         <string>1.0</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
@@ -61,12 +54,27 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>        <string>odysseus</string>
     <key>LSMinimumSystemVersion</key>  <string>11.0</string>
     <key>NSHighResolutionCapable</key> <true/>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
     <key>LSUIElement</key>             <false/>
 </dict>
 </plist>
 PLIST
 
-# ── Launcher executable (placeholders filled below) ──
+# ── Native Swift App or Shell Launcher ──
+SWIFT_SRC="$REPO_DIR/swift/OdysseusApp.swift"
+if command -v swiftc >/dev/null 2>&1 && [ -f "$SWIFT_SRC" ]; then
+  echo "  compiling native macOS desktop binary (Swift + WKWebView)..."
+  swiftc -O -framework Cocoa -framework WebKit "$SWIFT_SRC" -o "$APP/Contents/MacOS/$APP_NAME"
+else
+  # No Swift toolchain: fall back to a shell launcher that opens the UI in a
+  # browser app window (placeholders filled in after the heredoc).
+  echo "  fallback: generating shell app launcher..."
 cat > "$APP/Contents/MacOS/$APP_NAME.tmpl" <<'LAUNCHER'
 #!/bin/bash
 # Odysseus.app — start the local server and open the UI in an app window.
@@ -79,7 +87,8 @@ URL="http://127.0.0.1:${PORT}"
 export APP_PORT="$PORT"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-UVICORN="$INSTALL_DIR/venv/bin/uvicorn"
+UVICORN="$INSTALL_DIR/.venv/bin/uvicorn"
+[ -x "$UVICORN" ] || UVICORN="$INSTALL_DIR/venv/bin/uvicorn"
 LOG="$INSTALL_DIR/logs/odysseus-app.log"
 
 notify() { /usr/bin/osascript -e "display notification \"$1\" with title \"Odysseus\"" >/dev/null 2>&1; }
@@ -154,9 +163,23 @@ sed -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" -e "s|__PORT__|$PORT|g" \
     "$APP/Contents/MacOS/$APP_NAME.tmpl" > "$APP/Contents/MacOS/$APP_NAME"
 rm -f "$APP/Contents/MacOS/$APP_NAME.tmpl"
 chmod +x "$APP/Contents/MacOS/$APP_NAME"
+fi
 
-# Refresh Finder's icon cache for the new bundle.
 touch "$APP"
+
+# ── Code Signing ──
+if command -v codesign >/dev/null 2>&1; then
+  echo "  signing application bundle with local ad-hoc identity..."
+  codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
+fi
+
+# ── Install to /Applications ──
+echo "Installing to /Applications/$APP_NAME.app"
+rm -rf "/Applications/$APP_NAME.app"
+cp -R "$APP" "/Applications/$APP_NAME.app"
+if command -v codesign >/dev/null 2>&1; then
+  codesign --force --deep -s - "/Applications/$APP_NAME.app" >/dev/null 2>&1 || true
+fi
 
 # ── .dmg (drag-to-Applications) ──
 echo "Packaging dist/$APP_NAME.dmg"
@@ -169,9 +192,9 @@ hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DIST/
 rm -rf "$STAGE"
 
 echo ""
-echo "Done:"
-echo "  $APP"
-echo "  $DIST/$APP_NAME.dmg"
+echo "✔ Odysseus for macOS is built and installed!"
+echo "  Installed App: /Applications/$APP_NAME.app"
+echo "  Dist App:      $APP"
+echo "  Dist DMG:      $DIST/$APP_NAME.dmg"
 echo ""
-echo "Run it:        open '$APP'"
-echo "Install:       open '$DIST/$APP_NAME.dmg'  (drag Odysseus to Applications)"
+echo "Launch Odysseus: open '/Applications/$APP_NAME.app'"

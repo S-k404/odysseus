@@ -3330,6 +3330,7 @@ if (typeof window !== 'undefined' && !window._cookbookServeEscBound) {
 }
 
 export async function open(opts) {
+  if (window.odysseusDismissAllModals) window.odysseusDismissAllModals('cookbook-modal');
   const modal = document.getElementById('cookbook-modal');
   if (!modal) return;
   // Run any post-open intent (switch tab, prefill search, etc) after the

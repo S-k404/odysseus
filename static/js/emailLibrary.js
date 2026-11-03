@@ -2579,7 +2579,7 @@ export function openEmailLibrary(opts = {}) {
           <button class="email-settings-header-back" id="email-settings-header-back" type="button" title="Back" aria-label="Back" style="display:none;">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
           </button>
-          <button class="close-btn" id="email-lib-close">\u2716</button>
+          <button class="close-btn" id="email-lib-close" aria-label="Close email library"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
         </div>
       </div>
       <div class="modal-body" style="display:flex;flex-direction:column;gap:10px;overflow:hidden;">
@@ -7036,7 +7036,7 @@ async function _openEmailAsTab(em, folder) {
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:8px;">${_esc(em.subject || '(no subject)')}</span>
         </h4>
         <button class="minimize-btn" type="button" title="Minimize">_</button>
-        <button class="close-btn" type="button" title="Close">&#x2716;</button>
+        <button class="close-btn" type="button" title="Close" aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <div class="modal-body email-reader-tab-body" style="display:flex;flex-direction:column;overflow:hidden;flex:1;min-height:0;padding:0;">
         <div class="email-card-reader email-card-expanded" style="flex:1;min-height:0;display:flex;flex-direction:column;">
@@ -7275,7 +7275,7 @@ async function _openEmailWindow(em, folder) {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
           <span class="email-window-subject" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(em.subject || '(no subject)')}</span>
         </h4>
-        <button class="close-btn" type="button" title="Close">&#x2716;</button>
+        <button class="close-btn" type="button" title="Close" aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <div class="modal-body email-window-body" style="overflow:auto;padding:14px 16px;flex:1;min-height:0;">
         <div class="email-window-loading" style="display:flex;justify-content:center;padding:24px;"></div>

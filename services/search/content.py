@@ -82,11 +82,94 @@ def _extract_meta(soup: BeautifulSoup) -> dict:
     return {"description": description, "keywords": keywords}
 
 
+# ---------------------------------------------------------------------------
+# OG image scraping guardrails
+# ---------------------------------------------------------------------------
+
+# Set DEEP_RESEARCH_ENABLE_OG_IMAGES=false to disable all OG image scraping
+# and produce text/table/chart-only reports (no external images embedded).
+_OG_IMAGES_ENABLED: bool = os.environ.get(
+    "DEEP_RESEARCH_ENABLE_OG_IMAGES", "true"
+).strip().lower() not in ("false", "0", "no", "off")
+
+# Domains that reliably produce irrelevant images (e-commerce thumbnails,
+# social media avatars, CDN generic assets). Images from these hosts are
+# discarded regardless of what the OG tag says.
+_OG_IMAGE_DOMAIN_BLOCKLIST: frozenset = frozenset({
+    # E-commerce
+    "myntra.com", "www.myntra.com",
+    "amazon.com", "www.amazon.com", "amazon.in", "www.amazon.in",
+    "flipkart.com", "www.flipkart.com",
+    "snapdeal.com", "www.snapdeal.com",
+    "shopify.com", "www.shopify.com",
+    "etsy.com", "www.etsy.com",
+    "ebay.com", "www.ebay.com",
+    "aliexpress.com", "www.aliexpress.com",
+    "alibaba.com", "www.alibaba.com",
+    # Social media / sharing icons
+    "facebook.com", "www.facebook.com",
+    "instagram.com", "www.instagram.com",
+    "twitter.com", "www.twitter.com",
+    "x.com", "www.x.com",
+    "pinterest.com", "www.pinterest.com",
+    "linkedin.com", "www.linkedin.com",
+    "tiktok.com", "www.tiktok.com",
+    # Generic CDN / ad networks
+    "doubleclick.net",
+    "googleadservices.com",
+    "ads.twitter.com",
+})
+
+# Path tokens that indicate the image is a branding / UI asset, not content.
+# Matched against the URL path (lower-case) as whole path-segment tokens.
+_OG_IMAGE_PATH_BLOCKLIST_RE = re.compile(
+    r"/(?:logo|logos|banner|banners|skyline|thumbnail|thumbnails|"
+    r"avatar|avatars|icon|icons|favicon|placeholder|pixel|tracking|"
+    r"ads|ad[_\-]|tracking[_\-]|share[_\-]|social[_\-]share|"
+    r"og[_\-]default|default[_\-]og|generic[_\-]image|"
+    r"spacer|blank|empty|noimage|no[_\-]image)(?:[._/\-]|$)",
+    re.IGNORECASE,
+)
+
+
+def _is_blocked_og_image(url: str) -> bool:
+    """Return True if the OG image URL should be rejected by our guardrails."""
+    if not url:
+        return True
+    try:
+        from urllib.parse import urlparse as _up
+        parsed = _up(url)
+        hostname = (parsed.hostname or "").lower().lstrip("www.")
+        full_hostname = (parsed.hostname or "").lower()
+        if full_hostname in _OG_IMAGE_DOMAIN_BLOCKLIST or hostname in _OG_IMAGE_DOMAIN_BLOCKLIST:
+            return True
+        path = parsed.path or ""
+        if _OG_IMAGE_PATH_BLOCKLIST_RE.search(path):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_og_images_enabled() -> bool:
+    return os.environ.get(
+        "DEEP_RESEARCH_ENABLE_OG_IMAGES", "true"
+    ).strip().lower() not in ("false", "0", "no", "off")
+
+
 def _extract_og_image(soup: BeautifulSoup) -> str:
     """Extract the best representative image URL from meta tags.
 
-    Only returns absolute http(s) URLs -- skips relative paths and data URIs.
+    Only returns absolute http(s) URLs -- skips relative paths, data URIs,
+    SVG/ICO files, images from blocked e-commerce/social domains, and paths
+    that look like logos, banners, avatars, or tracking pixels.
+
+    Returns ``""`` immediately when the ``DEEP_RESEARCH_ENABLE_OG_IMAGES``
+    environment variable is set to ``false``/``0``/``no``/``off``.
     """
+    if not _is_og_images_enabled():
+        return ""
+
     candidates = []
     for prop in ("og:image", "og:image:url", "og:image:secure_url"):
         tag = soup.find("meta", attrs={"property": prop})
@@ -99,9 +182,12 @@ def _extract_og_image(soup: BeautifulSoup) -> str:
     if tag and tag.get("content", "").strip():
         candidates.append(tag["content"].strip())
     for url in candidates:
-        if url.startswith(("https://", "http://")) and not url.endswith((".svg", ".ico")):
+        if (url.startswith(("https://", "http://"))
+                and not url.endswith((".svg", ".ico", ".gif"))
+                and not _is_blocked_og_image(url)):
             return url
     return ""
+
 
 
 def _extract_lists(soup: BeautifulSoup) -> List[List[str]]:

@@ -53,6 +53,7 @@ import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js';
 import { getSettings } from './js/appConfig.js';
 import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js?v=20260715startupclean';
 import { initSectionCollapse, initSectionDrag } from './js/section-management.js';
+import { connectorsManager } from './js/connectors.js';
 
 const API_BASE = window.location.origin;
 window.themeModule = themeModule;
@@ -1291,18 +1292,306 @@ function initializeEventListeners() {
     });
   }
 
+  // Unified Claude-style close icon & modal coordinator
+  const CLAUDE_CLOSE_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+
+  function normalizeCloseIcons(root = document) {
+    const btns = root.querySelectorAll('.close-btn, .modal-close, .connectors-close-btn, .claude-drawer-close, .pane-close-btn, .doc-close-btn');
+    btns.forEach(btn => {
+      if (!btn.querySelector('svg')) {
+        btn.innerHTML = CLAUDE_CLOSE_SVG;
+      }
+    });
+  }
+
+  let _isDismissingModals = false;
+  window.odysseusDismissAllModals = function(exceptId = null) {
+    if (_isDismissingModals) return;
+    _isDismissingModals = true;
+    try {
+      // 1. Close popovers & menus
+      const claudeAccountMenu = el('claude-account-menu');
+      if (claudeAccountMenu && !claudeAccountMenu.classList.contains('hidden')) {
+        claudeAccountMenu.classList.add('hidden');
+      }
+
+      const modelPickerDropdown = document.getElementById('model-picker-dropdown');
+      if (modelPickerDropdown && !modelPickerDropdown.classList.contains('hidden')) {
+        modelPickerDropdown.classList.add('hidden');
+        modelPickerDropdown.classList.remove('closing');
+        const scrollBtn = document.getElementById('scroll-bottom-btn');
+        if (scrollBtn) scrollBtn.style.display = '';
+      }
+
+      const overflowMenu = document.getElementById('overflow-menu');
+      if (overflowMenu && !overflowMenu.classList.contains('hidden')) {
+        overflowMenu.classList.add('hidden');
+      }
+
+      // 2. Close other open modals
+      const openModals = document.querySelectorAll('.modal:not(.hidden)');
+      openModals.forEach(m => {
+        if (!m.id || m.id === exceptId) return;
+        // Don't close inline confirmation dialogs
+        if (m.classList.contains('styled-confirm-box') || m.id === 'confirm-modal' || m.id === 'delete-confirm-box') return;
+
+        // Clean tool-specific close calls if available
+        if (m.id === 'gallery-modal' && galleryModule && galleryModule.isGalleryOpen && galleryModule.isGalleryOpen()) {
+          try { galleryModule.closeGallery(); return; } catch (_) {}
+        }
+        if (m.id === 'cookbook-modal' && cookbookModule) {
+          try { cookbookModule.close(); return; } catch (_) {}
+        }
+        if (m.id === 'tasks-modal' && tasksModule && tasksModule.isTasksOpen && tasksModule.isTasksOpen()) {
+          try { tasksModule.closeTasks(); return; } catch (_) {}
+        }
+        if (m.id === 'calendar-modal' && calendarModule) {
+          try { calendarModule.closeCalendar(); return; } catch (_) {}
+        }
+        if (m.id === 'connectors-modal' && window.connectorsModule) {
+          try { window.connectorsModule.close(); return; } catch (_) {}
+        }
+        if (m.id === 'settings-modal' && settingsModule) {
+          try { settingsModule.close(); return; } catch (_) {}
+        }
+        if (m.id === 'search-chat-modal' && searchChatModule) {
+          try { searchChatModule.closeSearch(); return; } catch (_) {}
+        }
+
+        // Generic close button click or hide
+        const closeBtn = m.querySelector('.close-btn, .modal-close, [data-action="close"]');
+        if (closeBtn) {
+          try { closeBtn.click(); return; } catch (_) {}
+        }
+        m.classList.add('hidden');
+        m.style.display = 'none';
+      });
+    } finally {
+      _isDismissingModals = false;
+    }
+  };
+
+  // Global backdrop click dismiss: clicking outside .modal-content closes the modal
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.classList && e.target.classList.contains('modal')) {
+      const closeBtn = e.target.querySelector('.close-btn, .modal-close, [data-action="close"]');
+      if (closeBtn) {
+        closeBtn.click();
+      } else {
+        e.target.classList.add('hidden');
+        e.target.style.display = 'none';
+      }
+    }
+  });
+
+  // Global modal observer: ensures newly opened modals close other open modals
+  const modalObserver = new MutationObserver((mutations) => {
+    if (_isDismissingModals) return;
+    for (const mut of mutations) {
+      const target = mut.target;
+      if (target && target.classList && target.classList.contains('modal') &&
+          !target.classList.contains('hidden') && target.style.display !== 'none' &&
+          !target.classList.contains('styled-confirm-box') && target.id !== 'confirm-modal' && target.id !== 'delete-confirm-box') {
+        window.odysseusDismissAllModals(target.id);
+        normalizeCloseIcons(target);
+        break;
+      }
+    }
+  });
+  modalObserver.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['class', 'style'],
+  });
+
+  normalizeCloseIcons();
+
+  // Top Claude navigation items
+  const navProjectsBtn = el('nav-projects-btn');
+  const claudeNewProjBtn = el('claude-new-project-btn');
+  const _handleProjectClick = () => {
+    if (sessionModule && sessionModule.promptCreateProject) {
+      sessionModule.promptCreateProject();
+    }
+  };
+  if (navProjectsBtn) {
+    navProjectsBtn.addEventListener('click', _handleProjectClick);
+  }
+  if (claudeNewProjBtn) {
+    claudeNewProjBtn.addEventListener('click', _handleProjectClick);
+  }
+  const navArtifactsBtn = el('nav-artifacts-btn');
+  if (navArtifactsBtn) {
+    navArtifactsBtn.addEventListener('click', () => {
+      const galModal = document.getElementById('gallery-modal');
+      const isAlreadyOpen = galModal && !galModal.classList.contains('hidden') && galModal.style.display !== 'none';
+      if (isAlreadyOpen) {
+        if (galleryModule && galleryModule.closeGallery) galleryModule.closeGallery();
+        return;
+      }
+      window.odysseusDismissAllModals('gallery-modal');
+      const toolGal = el('tool-gallery-btn');
+      if (toolGal) toolGal.click();
+    });
+  }
+  const navScheduledBtn = el('nav-scheduled-btn');
+  if (navScheduledBtn) {
+    navScheduledBtn.addEventListener('click', () => {
+      const tasksModal = document.getElementById('tasks-modal');
+      const isAlreadyOpen = tasksModal && !tasksModal.classList.contains('hidden') && tasksModal.style.display !== 'none';
+      if (isAlreadyOpen) {
+        if (tasksModule && tasksModule.closeTasks) tasksModule.closeTasks();
+        return;
+      }
+      window.odysseusDismissAllModals('tasks-modal');
+      const toolTasks = el('tool-tasks-btn');
+      if (toolTasks) toolTasks.click();
+    });
+  }
+  const navDesignBtn = el('nav-design-btn');
+  if (navDesignBtn) {
+    navDesignBtn.addEventListener('click', () => {
+      const cookModal = document.getElementById('cookbook-modal');
+      const isAlreadyOpen = cookModal && !cookModal.classList.contains('hidden') && cookModal.style.display !== 'none';
+      if (isAlreadyOpen) {
+        if (cookbookModule && cookbookModule.close) cookbookModule.close();
+        return;
+      }
+      window.odysseusDismissAllModals('cookbook-modal');
+      const toolCook = el('tool-cookbook-btn');
+      if (toolCook) toolCook.click();
+    });
+  }
+  const navCustomizeBtn = el('nav-customize-btn');
+  if (navCustomizeBtn) {
+    navCustomizeBtn.addEventListener('click', () => {
+      const connModal = document.getElementById('connectors-modal');
+      const isAlreadyOpen = connModal && !connModal.classList.contains('hidden') && connModal.style.display !== 'none';
+      if (isAlreadyOpen) {
+        if (window.connectorsModule && window.connectorsModule.close) window.connectorsModule.close();
+        return;
+      }
+      window.odysseusDismissAllModals('connectors-modal');
+      const toolConn = el('tool-connectors-btn');
+      if (toolConn) toolConn.click();
+    });
+  }
+
   // Sidebar user bar — settings, admin, profile
   const userBarSettings = el('user-bar-settings');
   const userBarProfile = el('user-bar-profile');
   const userBarAdmin = el('user-bar-admin');
+  const claudeAccountMenu = el('claude-account-menu');
 
   if (userBarSettings) {
-    userBarSettings.addEventListener('click', () => settingsModule.open());
+    userBarSettings.addEventListener('click', () => {
+      window.odysseusDismissAllModals('settings-modal');
+      settingsModule.open();
+    });
   }
-  if (userBarProfile) {
-    // Clicking the user (avatar + name) jumps straight to the Account tab
-    // instead of landing on whatever was last selected.
-    userBarProfile.addEventListener('click', () => settingsModule.open('account'));
+  if (userBarProfile && claudeAccountMenu) {
+    userBarProfile.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const modelPickerDropdown = document.getElementById('model-picker-dropdown');
+      if (modelPickerDropdown) {
+        modelPickerDropdown.classList.add('hidden');
+      }
+      claudeAccountMenu.classList.toggle('hidden');
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!claudeAccountMenu.classList.contains('hidden') &&
+          !claudeAccountMenu.contains(e.target) &&
+          !userBarProfile.contains(e.target)) {
+        claudeAccountMenu.classList.add('hidden');
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !claudeAccountMenu.classList.contains('hidden')) {
+        claudeAccountMenu.classList.add('hidden');
+      }
+    });
+
+    // Account menu actions
+    const acctSettings = el('claude-acct-settings');
+    if (acctSettings) acctSettings.addEventListener('click', () => {
+      claudeAccountMenu.classList.add('hidden');
+      window.odysseusDismissAllModals('settings-modal');
+      settingsModule.open();
+    });
+    const acctUsage = el('claude-acct-usage');
+    if (acctUsage) acctUsage.addEventListener('click', () => {
+      claudeAccountMenu.classList.add('hidden');
+      window.odysseusDismissAllModals('settings-modal');
+      settingsModule.open('models');
+    });
+    const acctLang = el('claude-acct-lang');
+    if (acctLang) acctLang.addEventListener('click', () => {
+      claudeAccountMenu.classList.add('hidden');
+      window.odysseusDismissAllModals('settings-modal');
+      settingsModule.open('general');
+    });
+    const acctHelp = el('claude-acct-help');
+    if (acctHelp) acctHelp.addEventListener('click', () => {
+      claudeAccountMenu.classList.add('hidden');
+      window.open('https://github.com/pewdiepie-archdaemon/odysseus#readme', '_blank', 'noopener');
+    });
+    const acctExt = el('claude-acct-ext');
+    if (acctExt) acctExt.addEventListener('click', () => {
+      claudeAccountMenu.classList.add('hidden');
+      const extBtn = el('tool-extensions-btn') || el('tool-connectors-btn');
+      if (extBtn) extBtn.click();
+    });
+    const acctKeys = el('claude-acct-keys');
+    if (acctKeys) acctKeys.addEventListener('click', () => { claudeAccountMenu.classList.add('hidden'); settingsModule.open('models'); });
+    const acctLogout = el('claude-acct-logout');
+    if (acctLogout) acctLogout.addEventListener('click', () => {
+      claudeAccountMenu.classList.add('hidden');
+      settingsModule.logout();
+    });
+  }
+
+  // Voice recorder button wiring
+  const chatMicBtn = el('chat-mic-btn');
+  if (chatMicBtn) {
+    chatMicBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (voiceRecorderModule.getIsRecording()) {
+        voiceRecorderModule.stopRecording();
+        chatMicBtn.classList.remove('recording');
+      } else {
+        chatMicBtn.classList.add('recording');
+        voiceRecorderModule.startRecording(
+          (audioFile) => fileHandlerModule.addFiles([audioFile]),
+          uiModule.showToast,
+          (err) => {
+            chatMicBtn.classList.remove('recording');
+            uiModule.showError(err);
+          }
+        );
+      }
+    });
+  }
+
+  // Claude Progress sidebar toggle (Matches Screenshot 3)
+  const stepBadge = el('claude-step-badge');
+  const progressSidebar = el('claude-progress-sidebar');
+  const progressCloseBtn = el('claude-progress-close-btn');
+
+  if (stepBadge && progressSidebar) {
+    stepBadge.style.cursor = 'pointer';
+    stepBadge.title = 'Toggle Progress & Session Context';
+    stepBadge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      progressSidebar.classList.toggle('hidden');
+    });
+  }
+  if (progressCloseBtn && progressSidebar) {
+    progressCloseBtn.addEventListener('click', () => {
+      progressSidebar.classList.add('hidden');
+    });
   }
   if (userBarAdmin) {
     userBarAdmin.addEventListener('click', () => adminModule.open());
@@ -1316,17 +1605,21 @@ function initializeEventListeners() {
       if (d.is_admin && userBarAdmin) userBarAdmin.style.display = '';
       const userBarName = el('user-bar-name');
       const userBarAvatar = el('user-bar-avatar');
-      if (userBarName && d.username) {
-        let displayName = d.username;
-        // Mask email addresses
-        if (displayName.includes('@')) {
-          const [local, domain] = displayName.split('@');
-          const ext = domain.includes('.') ? domain.slice(domain.lastIndexOf('.')) : '';
-          displayName = local.charAt(0) + '•••@••••' + ext;
-        }
-        userBarName.textContent = displayName;
-        if (userBarAvatar) userBarAvatar.textContent = d.username.charAt(0).toUpperCase();
+      const claudeEmail = el('claude-account-email');
+      const displayName = d.display_name || d.name || d.username || 'Odysseus User';
+      if (claudeEmail) {
+        claudeEmail.textContent = d.email || (d.username ? `${d.username}@local` : 'user@local');
       }
+      if (userBarName) {
+        userBarName.textContent = displayName;
+      }
+      if (userBarAvatar) {
+        userBarAvatar.textContent = (displayName || 'U').charAt(0).toUpperCase();
+      }
+      // Greet by first name, unless it's still the placeholder name.
+      const _realName = d.display_name || d.name || '';
+      window._welcomeFirstName = _realName && _realName !== 'Odysseus User' ? _realName.trim().split(/\s+/)[0] : '';
+      chatRenderer.renderWelcomeGreeting();
       // Apply per-user privilege restrictions
       if (d.privileges) {
         window._userPrivileges = d.privileges;
@@ -2411,7 +2704,7 @@ function initializeEventListeners() {
 	        textarea.setAttribute('placeholder', 'Swipe to toggle plan');
 	        return;
 	      }
-	      textarea.setAttribute('placeholder', width < PLACEHOLDER_COMPACT_WIDTH ? 'Message...' : 'Message Odysseus...');
+	      textarea.setAttribute('placeholder', 'Reply');
 	    }
 
 	    if (_isMobile && textarea && !textarea._odysseusPlanPlaceholderHint) {
@@ -3314,6 +3607,12 @@ function initializeEventListeners() {
       if (!sessionModule) return;
       if (_closeCompareIfActive()) return;
       _deactivateIncognito();
+      if (!window._preserveProjectOnNewChat) {
+        window.currentProject = null;
+        const pw = document.getElementById('claude-crumb-project-wrap');
+        if (pw) pw.style.display = 'none';
+      }
+      window._preserveProjectOnNewChat = false;
       // Clear character on new chat
       if (presetsModule && presetsModule.deactivateCharacter) presetsModule.deactivateCharacter();
       // Clear research mode if active
@@ -3373,6 +3672,7 @@ function initializeEventListeners() {
   if (sidebarNewChatBtn) {
     sidebarNewChatBtn.addEventListener('click', async (e) => {
       if (e) { e.preventDefault(); e.stopImmediatePropagation(); }
+      if (window.odysseusDismissAllModals) window.odysseusDismissAllModals();
       await _handleNewChatAction();
     });
   }
@@ -3830,6 +4130,13 @@ function startOdysseusApp() {
   const sidebarSearchBtn = el('sidebar-search-btn');
   if (sidebarSearchBtn) {
     sidebarSearchBtn.addEventListener('click', () => {
+      const searchModal = document.getElementById('search-chat-modal');
+      const isAlreadyOpen = searchModal && !searchModal.classList.contains('hidden') && searchModal.style.display !== 'none';
+      if (isAlreadyOpen) {
+        if (searchChatModule && searchChatModule.closeSearch) searchChatModule.closeSearch();
+        return;
+      }
+      if (window.odysseusDismissAllModals) window.odysseusDismissAllModals('search-chat-modal');
       if (searchChatModule) searchChatModule.openSearch();
     });
   }
@@ -4573,6 +4880,12 @@ function startOdysseusApp() {
     document.querySelectorAll('pre code:not(.hljs)').forEach(block => {
       window.hljs.highlightElement(block);
     });
+  }
+
+  try {
+    connectorsManager.init();
+  } catch (err) {
+    console.error('Failed to initialize connectorsManager:', err);
   }
 }
 

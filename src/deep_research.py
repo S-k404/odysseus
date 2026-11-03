@@ -49,20 +49,27 @@ Break this question down:
 3. What would a complete, high-quality answer include?
 
 Return a JSON object with:
-- "sub_questions": Array of 3-6 specific sub-questions to investigate
+- "sub_questions": Array of 3-6 specific sub-questions to investigate.
+  Each sub-question MUST be phrased as a precise, search-engine-ready query
+  (e.g. use technical terms, model names, algorithm names, Boolean operators).
+  DO NOT write conversational sentences — write keyword-rich search strings.
 - "key_topics": Array of key topics/angles to cover
 - "success_criteria": One sentence describing what a complete answer looks like
 
 Example:
 {{
-  "sub_questions": ["What is the cost of living in X?", "How is the healthcare system?"],
-  "key_topics": ["economy", "healthcare", "safety", "culture"],
-  "success_criteria": "A balanced comparison covering cost, quality of life, and practical considerations."
+  "sub_questions": [
+    "KV cache compression LLM inference 2024 arxiv",
+    "RoPE scaling long-context transformer survey",
+    "FlashAttention-2 memory efficiency benchmark"
+  ],
+  "key_topics": ["memory efficiency", "inference speed", "context length"],
+  "success_criteria": "A thorough technical comparison with benchmarks and implementation details."
 }}
 """
 
 QUERY_GEN_PROMPT = """\
-You are a research assistant planning web searches.
+You are a research assistant generating precise web search queries.
 
 **Original question:** {question}
 
@@ -77,8 +84,23 @@ You are a research assistant planning web searches.
 Generate {num_queries} focused search queries that will help answer the question.
 {round_instruction}
 
+## CRITICAL: Query Formatting Rules
+You are writing SEARCH ENGINE QUERIES, not sentences. Follow these rules exactly:
+
+1. **Use precise technical terms** — exact model names (GPT-4o, LLaMA-3, Mistral-7B),
+   algorithm names (RoPE, FlashAttention, LoRA), dataset names (MMLU, HumanEval).
+2. **Use Boolean operators** — `"exact phrase"`, `term1 AND term2`, `term1 OR term2`.
+3. **No conversational language** — never write "What are the best..." or
+   "Can you explain..." or include stop-words like "top", "best", "buy", "local".
+4. **Target specific sources** for academic topics:
+   - Append `arxiv` or `site:arxiv.org` for ML/AI papers
+   - Append `site:github.com` for code/implementations
+   - Append `site:huggingface.co` for model cards
+   - Append `openreview` for recent conference papers
+5. **Include year** (e.g. 2024, 2025) if recency matters.
+
 Return ONLY a JSON array of query strings, nothing else.
-Example: ["query one", "query two", "query three"]
+Example: ["RoPE scaling long-context LLM arxiv 2024", "FlashAttention-2 benchmark throughput site:arxiv.org"]
 """
 
 SYNTHESIZE_PROMPT = """\
@@ -301,7 +323,8 @@ class DeepResearcher:
             self._emit(phase="searching", round=round_num, total_sources=len(self.urls_fetched))
 
             # THINK: generate queries
-            queries = await self._generate_queries(question, report, round_num)
+            queries = await self._generate_queries(question, report, round_num,
+                                                   consecutive_empty=consecutive_empty_rounds)
             if not queries:
                 logger.warning(f"Round {round_num}: no queries generated, stopping")
                 break
@@ -401,7 +424,7 @@ class DeepResearcher:
         prompt = current_date_context() + RESEARCH_PLAN_PROMPT.format(question=question)
         try:
             response = await self._llm(
-                [{"role": "user", "content": prompt}],
+                [{"role": "user", "content": prompt + "\n\nCRITICAL: Output the JSON directly. Do not use a <think> block."}],
                 temperature=0.3,
                 max_tokens=1024,
                 timeout=getattr(self, "planning_timeout", 90),
@@ -459,19 +482,38 @@ class DeepResearcher:
     # THINK: generate search queries
     # ------------------------------------------------------------------
     async def _generate_queries(self, question: str, report: str,
-                                round_num: int) -> List[str]:
+                                round_num: int,
+                                consecutive_empty: int = 0) -> List[str]:
         if round_num == 1:
             num_queries = 4
             round_instruction = (
                 "This is the first round — generate broad, diverse queries "
-                "that explore the key facets of the question."
+                "that explore the key facets of the question. "
+                "Use precise technical terms, model/algorithm names, and Boolean operators. "
+                "Avoid stop-words like 'best', 'top', or 'buy'."
+            )
+        elif consecutive_empty >= 1:
+            # Dead-end detected: previous rounds returned 0 relevant results.
+            # Broaden the strategy rather than repeating the same queries.
+            num_queries = 3
+            round_instruction = (
+                f"WARNING: The last {consecutive_empty} search round(s) returned no "
+                "useful academic results. Switch to a broadening strategy:\n"
+                "1. Widen the timeframe — search over 6-12 months instead of 30 days.\n"
+                "2. Fall back to fundamental technique names (e.g. 'KV cache compression survey', "
+                "'attention mechanism efficiency review').\n"
+                "3. Use alternative synonyms or parent concepts for the topic.\n"
+                "4. Try site:arxiv.org or site:semanticscholar.org to anchor to academic results.\n"
+                "Do NOT repeat queries from previous rounds. Generate completely different search strings."
             )
         else:
             num_queries = 3
             round_instruction = (
-                "We already have partial findings.  Generate targeted follow-up "
+                "We already have partial findings. Generate targeted follow-up "
                 "queries to fill gaps, verify claims, or explore specific aspects "
-                "that the report doesn't yet cover well."
+                "that the report doesn't yet cover well. "
+                "Use precise technical terminology, Boolean operators, and exact names — "
+                "not conversational sentences."
             )
 
         prompt = current_date_context() + QUERY_GEN_PROMPT.format(
@@ -485,7 +527,7 @@ class DeepResearcher:
 
         try:
             response = await self._llm(
-                [{"role": "user", "content": prompt}],
+                [{"role": "user", "content": prompt + "\n\nCRITICAL: Output the JSON array directly. Do not use a <think> block."}],
                 temperature=0.5,
                 max_tokens=4096,
                 timeout=getattr(self, "query_timeout", 120),
@@ -579,7 +621,14 @@ class DeepResearcher:
             raised = False
             for prov in chain:
                 try:
-                    results = await asyncio.to_thread(_call_provider, prov, query, 10)
+                    try:
+                        results = await asyncio.to_thread(
+                            _call_provider, prov, query, 10, research_mode=True
+                        )
+                    except TypeError:
+                        results = await asyncio.to_thread(
+                            _call_provider, prov, query, 10
+                        )
                     if results:
                         logger.info(f"Research search: {prov} returned {len(results)} results")
                         if prov not in self.providers_used:

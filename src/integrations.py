@@ -397,16 +397,20 @@ class _PinnedAsyncBackend(httpcore.AsyncNetworkBackend):
         # phase to N * timeout.
         deadline = None if timeout is None else time.monotonic() + timeout
         last_exc: Optional[Exception] = None
-        for ip in self._ips:
+        for idx, ip in enumerate(self._ips):
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            attempt_timeout = remaining
+            remaining_count = len(self._ips) - idx
+            if remaining is not None and remaining_count > 1:
+                attempt_timeout = min(remaining, max(1.0, remaining / remaining_count))
             try:
                 return await self._real.connect_tcp(
-                    ip, port, remaining, local_address, socket_options
+                    ip, port, attempt_timeout, local_address, socket_options
                 )
             except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
                 last_exc = exc
-                if deadline is not None and time.monotonic() >= deadline:
-                    break
         raise last_exc
 
     async def connect_unix_socket(self, path, timeout=None, socket_options=None):

@@ -1867,7 +1867,7 @@ async function _showSkillSource(name) {
         <h4>SKILL.md — <code>${esc(name)}</code></h4>
         <span style="flex:1"></span>
         <button class="memory-toolbar-btn" id="skill-save-btn">Save</button>
-        <button class="close-btn" id="skill-md-close">✖</button>
+        <button class="close-btn" id="skill-md-close" aria-label="Close skill editor"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <div class="modal-body" style="display:flex;flex-direction:column;gap:8px">
         <textarea id="skill-md-textarea" spellcheck="false" style="flex:1;min-height:50vh;width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg);box-sizing:border-box"></textarea>

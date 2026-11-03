@@ -8,6 +8,7 @@ import { providerLogo } from './providers.js';
 import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260722ctxheader1';
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
+import { releaseLocalModels } from './localModels.js';
 
 const API_BASE = window.location.origin;
 
@@ -286,7 +287,14 @@ function _deselectCurrentSession(sid) {
   if (currentSessionId !== sid) return;
   currentSessionId = null;
   uiModule.el('chat-history').innerHTML = '';
-  uiModule.el('current-meta').textContent = 'Odysseus Chat';
+  const metaEl = uiModule.el('current-meta');
+  if (metaEl) metaEl.textContent = '';
+  const sessBtn = document.getElementById('claude-crumb-session-btn');
+  if (sessBtn) sessBtn.style.display = 'none';
+  const projWrap = document.getElementById('claude-crumb-project-wrap');
+  if (projWrap) projWrap.style.display = 'none';
+  const stepBadge = document.getElementById('claude-step-badge');
+  if (stepBadge) stepBadge.style.display = 'none';
   Storage.remove('lastSessionId');
   history.replaceState(null, '', window.location.pathname);
   if (window.chatModule && window.chatModule.showWelcomeScreen) {
@@ -344,6 +352,56 @@ export function initDependencies() {}
 // ── Folder state persistence ──
 const FOLDER_STATE_KEY = 'odysseus-folder-state';
 const FOLDER_ORDER_KEY = 'odysseus-folder-order';
+const PROJECT_FOLDERS_KEY = 'odysseus-project-folders';
+
+export function loadAllProjectFolders() {
+  const fromStorage = Storage.getJSON(PROJECT_FOLDERS_KEY, []);
+  const fromSessions = getFolderNames();
+  const set = new Set([...fromStorage, ...fromSessions]);
+  return Array.from(set).filter(name => name && name !== 'Assistant');
+}
+
+export function saveProjectFolder(name) {
+  const all = loadAllProjectFolders();
+  if (!all.includes(name)) all.push(name);
+  Storage.setJSON(PROJECT_FOLDERS_KEY, all);
+}
+
+export function deleteProjectFolder(name) {
+  const all = loadAllProjectFolders().filter(n => n !== name);
+  Storage.setJSON(PROJECT_FOLDERS_KEY, all);
+}
+
+export function newChatInProject(projectName) {
+  window.currentProject = projectName;
+  window._preserveProjectOnNewChat = true;
+  const newBtn = document.getElementById('sidebar-new-chat-btn');
+  if (newBtn) {
+    newBtn.click();
+  }
+  const projWrap = document.getElementById('claude-crumb-project-wrap');
+  const projNameEl = document.getElementById('claude-crumb-project');
+  if (projWrap && projNameEl) {
+    projNameEl.textContent = `Projects - ${projectName}`;
+    projWrap.style.display = 'inline-flex';
+  }
+}
+
+export async function promptCreateProject() {
+  const name = await styledPrompt('Enter project name:', {
+    title: 'New Project',
+    placeholder: 'e.g. Hardware Scoping, Research, Website',
+    confirmText: 'Create Project',
+  });
+  if (!name || !name.trim()) return;
+  const clean = name.trim();
+  saveProjectFolder(clean);
+  const state = loadFolderState();
+  state[clean] = true;
+  saveFolderState(state);
+  newChatInProject(clean);
+  renderSessionList();
+}
 
 function loadFolderState() {
   return Storage.getJSON(FOLDER_STATE_KEY, {});
@@ -378,22 +436,22 @@ async function moveToFolder(sessionId, folderName) {
 
 /** Build the "Move to folder" submenu for a session dropdown. */
 function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
-  const folders = getFolderNames();
+  const folders = loadAllProjectFolders();
 
   const moveItem = document.createElement('div');
   moveItem.className = 'dropdown-item-compact';
   moveItem.style.position = 'relative';
-  const _folderIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
-  moveItem.innerHTML = '<span class="dropdown-icon">' + _folderIcon + '</span><span>Move to folder</span>';
+  const _folderIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6z"/></svg>';
+  moveItem.innerHTML = '<span class="dropdown-icon">' + _folderIcon + '</span><span>Move to Project</span>';
 
   const sub = document.createElement('div');
   sub.className = 'dropdown session-folder-submenu';
 
-  // "No folder" option
+  // "No project" option
   const noneOpt = document.createElement('div');
   noneOpt.className = 'dropdown-item-compact';
   if (!currentFolder) noneOpt.style.opacity = '0.5';
-  noneOpt.textContent = '(No folder)';
+  noneOpt.textContent = '(No Project)';
   noneOpt.addEventListener('click', async (e) => {
     e.stopPropagation();
     await moveToFolder(sessionId, '');
@@ -402,7 +460,7 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
   });
   sub.appendChild(noneOpt);
 
-  // Existing folders
+  // Existing project folders
   folders.forEach(f => {
     const opt = document.createElement('div');
     opt.className = 'dropdown-item-compact';
@@ -411,33 +469,28 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
     opt.addEventListener('click', async (e) => {
       e.stopPropagation();
       await moveToFolder(sessionId, f);
-      // Auto-flip to By Folder view so the user can see where the
-      // chat went, same as when creating a new folder.
-      setSortMode('group');
       dropdown.style.display = 'none';
       sub.style.display = 'none';
     });
     sub.appendChild(opt);
   });
 
-  // "New folder" option
+  // "New Project" option
   const newOpt = document.createElement('div');
   newOpt.className = 'dropdown-item-compact';
   newOpt.style.color = 'var(--accent-primary)';
-  newOpt.textContent = '+ New Folder';
+  newOpt.textContent = '+ New Project';
   newOpt.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const name = await styledPrompt('Name this folder:', {
-      title: 'New folder',
-      placeholder: 'e.g. Work, Research, Drafts',
+    const name = await styledPrompt('Enter project name:', {
+      title: 'New Project',
+      placeholder: 'e.g. Hardware Scoping, Research, Website',
       confirmText: 'Create',
     });
     if (!name || !name.trim()) return;
-    await moveToFolder(sessionId, name.trim());
-    // Auto-flip to By Folder view so the user immediately sees the
-    // folder they just created — otherwise the new folder disappears
-    // into the flat list and looks like the action did nothing.
-    setSortMode('group');
+    const clean = name.trim();
+    saveProjectFolder(clean);
+    await moveToFolder(sessionId, clean);
     dropdown.style.display = 'none';
     sub.style.display = 'none';
   });
@@ -567,8 +620,8 @@ function createSessionItem(s) {
   let chatTitle = s.name || '';
   if (_isFork) chatTitle = chatTitle.replace(/^Fork:\s*/, '').replace(/^\u2ADD\s*/, '');
   if (_isGroup) chatTitle = chatTitle.replace(/^\[GRP\]\s*/, '');
+  // Title only, as in Claude; the model is in the tooltip below.
   let label = chatTitle;
-  if (s.model) label += ' · ' + s.model.split('/').pop();
   if (s.archived) label += ' [archived]';
   span.textContent = label;
   span.title = (s.model ? s.model.split('/').pop() + ' · ' : '') + chatTitle;
@@ -1066,6 +1119,151 @@ function _appendFavoriteSessionItems(frag, items) {
   }
 }
 
+/** Render a single Claude-style project folder item (Matches Screenshot 3) */
+function _renderClaudeProjectFolder(folderName, folderSessions, folderState) {
+  const folderDiv = document.createElement('div');
+  folderDiv.className = 'claude-project-item';
+  folderDiv.dataset.folderName = folderName;
+
+  const header = document.createElement('div');
+  header.className = 'claude-project-header';
+  header.dataset.folderName = folderName;
+  const isCollapsed = folderState[folderName] === false;
+
+  // Folder icon
+  const iconSpan = document.createElement('span');
+  iconSpan.className = 'claude-project-icon';
+  iconSpan.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6z"/></svg>';
+  header.appendChild(iconSpan);
+
+  // Folder name
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'claude-project-name';
+  nameSpan.textContent = folderName;
+  header.appendChild(nameSpan);
+
+  // Actions wrapper (visible on hover)
+  const actionsWrap = document.createElement('div');
+  actionsWrap.className = 'claude-project-actions';
+
+  // Add chat button (+)
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'claude-project-btn claude-project-add-btn';
+  addBtn.title = `New chat in ${folderName}`;
+  addBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+  addBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    newChatInProject(folderName);
+  });
+  actionsWrap.appendChild(addBtn);
+
+  // Options button (...)
+  const menuBtn = document.createElement('button');
+  menuBtn.type = 'button';
+  menuBtn.className = 'claude-project-btn claude-project-menu-btn';
+  menuBtn.title = 'Project options';
+  menuBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>';
+  menuBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const action = await uiModule.styledConfirm(`Project "${folderName}": Choose an action`, {
+      confirmText: 'Rename',
+      cancelText: 'Delete Project',
+      danger: false,
+    });
+    if (action === true) {
+      const newName = await styledPrompt('Rename project:', {
+        title: 'Rename Project',
+        defaultValue: folderName,
+        confirmText: 'Rename',
+      });
+      if (!newName || !newName.trim() || newName.trim() === folderName) return;
+      const clean = newName.trim();
+      deleteProjectFolder(folderName);
+      saveProjectFolder(clean);
+      const promises = (folderSessions || []).map(s => moveToFolder(s.id, clean));
+      Promise.all(promises).then(() => {
+        if (window.currentProject === folderName) window.currentProject = clean;
+        loadSessions();
+      });
+    } else if (action === false) {
+      const count = (folderSessions || []).length;
+      if (!await uiModule.styledConfirm(`Delete project "${folderName}" and all ${count} chat(s) inside it?`, { confirmText: 'Delete', danger: true })) return;
+      deleteProjectFolder(folderName);
+      for (const s of (folderSessions || [])) {
+        try {
+          await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE' });
+          _deselectCurrentSession(s.id);
+        } catch (_) {}
+      }
+      if (window.currentProject === folderName) window.currentProject = null;
+      await loadSessions();
+    }
+  });
+  actionsWrap.appendChild(menuBtn);
+  header.appendChild(actionsWrap);
+
+  // Chevron
+  const chevron = document.createElement('span');
+  chevron.className = `claude-project-chevron ${isCollapsed ? 'collapsed' : ''}`;
+  chevron.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>';
+  header.appendChild(chevron);
+
+  header.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (e.target.closest('.claude-project-btn')) return;
+    const state = loadFolderState();
+    state[folderName] = !isCollapsed ? false : true;
+    saveFolderState(state);
+    renderSessionList();
+  });
+
+  folderDiv.appendChild(header);
+
+  if (!isCollapsed) {
+    const content = document.createElement('div');
+    content.className = 'claude-project-sessions';
+
+    if (!folderSessions || folderSessions.length === 0) {
+      const emptyRow = document.createElement('div');
+      emptyRow.className = 'claude-project-empty-action';
+      emptyRow.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New chat in this project';
+      emptyRow.addEventListener('click', (e) => {
+        e.stopPropagation();
+        newChatInProject(folderName);
+      });
+      content.appendChild(emptyRow);
+    } else {
+      const folderExpanded = _expandedFolders[folderName];
+      const folderLimit = folderExpanded ? folderSessions.length : FOLDER_MAX_VISIBLE;
+      const visibleFolder = folderSessions.slice(0, folderLimit);
+      const activeInFolder = folderSessions.findIndex(s => s.id === currentSessionId);
+      if (!folderExpanded && activeInFolder >= folderLimit) {
+        visibleFolder.push(folderSessions[activeInFolder]);
+      }
+      visibleFolder.forEach(s => {
+        const itemEl = createSessionItem(s);
+        content.appendChild(itemEl);
+      });
+      if (folderSessions.length > FOLDER_MAX_VISIBLE) {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'session-show-more-btn';
+        toggleBtn.textContent = folderExpanded ? 'Show less' : `Show ${folderSessions.length - FOLDER_MAX_VISIBLE} more`;
+        toggleBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          _expandedFolders[folderName] = !_expandedFolders[folderName];
+          renderSessionList();
+        });
+        content.appendChild(toggleBtn);
+      }
+    }
+    folderDiv.appendChild(content);
+  }
+
+  return folderDiv;
+}
+
 let _renderRAF = null;
 export function renderSessionList() {
   // Debounce rapid re-renders within the same frame
@@ -1106,31 +1304,62 @@ function _renderSessionListImpl() {
 
   const _frag = document.createDocumentFragment();
 
-  // ── Flat sort modes: ignore folders, show one ordered list. ──
-  // Folders are only shown when _sortMode === 'group' (or null/empty
-  // for manual mode). This keeps the picker simple: a folder-grouped
-  // view is one of the sort choices, alongside Last Active / Newest.
-  if (_sortMode && _sortMode !== 'group') {
-    orderedSessions.sort((a, b) => {
-      if (_sortMode === 'newest') return (b.created_at || '').localeCompare(a.created_at || '');
-      // "Last active" sorts by the last actual MESSAGE, not updated_at —
-      // updated_at is bumped by renames / model swaps / folder moves, which
-      // made the order feel random. Fall back to updated_at/created_at for
-      // older rows that predate the last_message_at backfill.
-      if (_sortMode === 'active') {
-        const av = a.last_message_at || a.updated_at || a.created_at || '';
-        const bv = b.last_message_at || b.updated_at || b.created_at || '';
-        return bv.localeCompare(av);
-      }
-      return 0;
-    });
-    // Favorites are a global pinned block above date buckets, not just
-    // promoted within the day they belong to.
-    const allFlat = [
-      ...orderedSessions.filter(s => s.is_important),
-      ...orderedSessions.filter(s => !s.is_important),
-    ];
+  const allProjectNames = loadAllProjectFolders();
+  const folderState = loadFolderState();
+  const folders = {};
+  const unfiled = [];
 
+  orderedSessions.forEach(s => {
+    if (s.folder && s.folder !== 'Assistant') {
+      if (!folders[s.folder]) folders[s.folder] = [];
+      folders[s.folder].push(s);
+    } else {
+      unfiled.push(s);
+    }
+  });
+
+  allProjectNames.forEach(name => {
+    if (!folders[name]) folders[name] = [];
+  });
+
+  // Sort sessions within each project folder by activity
+  Object.values(folders).forEach(arr => {
+    arr.sort((a, b) => {
+      const av = a.last_message_at || a.updated_at || a.created_at || '';
+      const bv = b.last_message_at || b.updated_at || b.created_at || '';
+      return bv.localeCompare(av);
+    });
+  });
+
+  // 1. Render Claude Project Folders first under PINNED
+  if (allProjectNames.length > 0) {
+    allProjectNames.forEach(folderName => {
+      const projEl = _renderClaudeProjectFolder(folderName, folders[folderName] || [], folderState);
+      _frag.appendChild(projEl);
+    });
+  }
+
+  // 2. Render Unfiled / Recent sessions below
+  unfiled.sort((a, b) => {
+    if (_sortMode === 'newest') return (b.created_at || '').localeCompare(a.created_at || '');
+    const av = a.last_message_at || a.updated_at || a.created_at || '';
+    const bv = b.last_message_at || b.updated_at || b.created_at || '';
+    return bv.localeCompare(av);
+  });
+
+  const allFlat = [
+    ...unfiled.filter(s => s.is_important),
+    ...unfiled.filter(s => !s.is_important),
+  ];
+
+  if (allFlat.length > 0) {
+    if (allProjectNames.length > 0) {
+      const chatsHeader = document.createElement('div');
+      chatsHeader.className = 'claude-sidebar-section-header';
+      chatsHeader.style.paddingTop = '14px';
+      chatsHeader.innerHTML = '<span>Recent</span>';
+      _frag.appendChild(chatsHeader);
+    }
     const limit = _showAllSessions ? allFlat.length : SIDEBAR_MAX_VISIBLE;
     const visible = allFlat.slice(0, limit);
     const activeIdx = allFlat.findIndex(s => s.id === currentSessionId);
@@ -1144,6 +1373,7 @@ function _renderSessionListImpl() {
     if (allFlat.length > SIDEBAR_MAX_VISIBLE) {
       const remaining = allFlat.length - SIDEBAR_MAX_VISIBLE;
       const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
       toggleBtn.className = 'session-show-more-btn';
       toggleBtn.textContent = _showAllSessions ? 'Show less' : `Show ${remaining} more`;
       toggleBtn.addEventListener('click', (e) => {
@@ -1153,260 +1383,6 @@ function _renderSessionListImpl() {
       });
       _frag.appendChild(toggleBtn);
     }
-
-    list.innerHTML = '';
-    list.appendChild(_frag);
-    _postRenderSessionList(list);
-    return;
-  }
-
-  // ── Group / manual mode: render folders, then unfiled sessions. ──
-  const folderState = loadFolderState();
-  const folders = {}; // folderName -> [sessions]
-  const unfiled = [];
-
-  orderedSessions.forEach(s => {
-    if (s.folder) {
-      if (!folders[s.folder]) folders[s.folder] = [];
-      folders[s.folder].push(s);
-    } else {
-      unfiled.push(s);
-    }
-  });
-
-  // Move starred sessions to top of each group, preserving relative order
-  const starPartition = (arr) => {
-    const starred = arr.filter(s => s.is_important);
-    const rest = arr.filter(s => !s.is_important);
-    arr.length = 0;
-    arr.push(...starred, ...rest);
-  };
-  starPartition(unfiled);
-  Object.values(folders).forEach(arr => starPartition(arr));
-
-  // Render folders first (above unfiled sessions)
-  const savedFolderOrder = loadFolderOrder();
-  const allFolderNames = Object.keys(folders);
-  const orderedFolderNames = [];
-  savedFolderOrder.forEach(name => {
-    if (allFolderNames.includes(name)) orderedFolderNames.push(name);
-  });
-  allFolderNames.forEach(name => {
-    if (!orderedFolderNames.includes(name)) orderedFolderNames.push(name);
-  });
-
-  orderedFolderNames.forEach(folderName => {
-    const folderDiv = document.createElement('div');
-    folderDiv.className = 'session-folder';
-    folderDiv.dataset.folderName = folderName;
-
-    const header = document.createElement('div');
-    header.className = 'session-folder-header';
-    header.dataset.folderName = folderName;
-    const collapsed = folderState[folderName] === false;
-
-    // Drag handle for folder reordering
-    const dragHandle = document.createElement('span');
-    dragHandle.className = 'folder-drag-handle';
-    dragHandle.textContent = '\u2630';
-    dragHandle.title = 'Drag to reorder folder';
-    header.appendChild(dragHandle);
-
-    const toggle = document.createElement('span');
-    toggle.className = 'folder-toggle';
-    toggle.textContent = collapsed ? '\u25B6' : '\u25BC';
-    header.appendChild(toggle);
-
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'folder-name';
-    nameSpan.textContent = folderName;
-    header.appendChild(nameSpan);
-
-    const countSpan = document.createElement('span');
-    countSpan.className = 'folder-count';
-    countSpan.textContent = `(${folders[folderName].length})`;
-    header.appendChild(countSpan);
-
-    // Delete folder button
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'folder-delete-btn';
-    deleteBtn.textContent = '\u00d7';
-    deleteBtn.title = 'Delete folder and all sessions';
-    deleteBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const count = folders[folderName].length;
-      if (!await uiModule.styledConfirm(`Delete folder "${folderName}" and all ${count} session(s) inside it?`, { confirmText: 'Delete', danger: true })) return;
-      for (const s of folders[folderName]) {
-        try {
-          await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE' });
-          _deselectCurrentSession(s.id);
-        } catch (err) {
-          console.error('Failed to delete session:', s.id, err);
-        }
-      }
-      await loadSessions();
-    });
-    header.appendChild(deleteBtn);
-
-    let _folderTouchMoved = false;
-    header.addEventListener('touchstart', () => { _folderTouchMoved = false; }, { passive: true });
-    header.addEventListener('touchmove', () => { _folderTouchMoved = true; }, { passive: true });
-    header.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (e.target.closest('.folder-drag-handle') || e.target.closest('.folder-delete-btn')) return;
-      if (_folderTouchMoved) { _folderTouchMoved = false; return; }
-      const state = loadFolderState();
-      const isCollapsed = state[folderName] === false;
-      state[folderName] = isCollapsed ? true : false;
-      saveFolderState(state);
-      renderSessionList();
-    });
-
-    // Allow renaming folder via double-click
-    header.addEventListener('dblclick', async (e) => {
-      e.stopPropagation();
-      if (e.target.closest('.folder-delete-btn')) return;
-      const newName = await styledPrompt('Rename folder:', {
-        title: 'Rename folder',
-        defaultValue: folderName,
-        confirmText: 'Rename',
-      });
-      if (!newName || !newName.trim() || newName.trim() === folderName) return;
-      const promises = folders[folderName].map(s => moveToFolder(s.id, newName.trim()));
-      Promise.all(promises).then(() => loadSessions());
-    });
-
-    folderDiv.appendChild(header);
-
-    if (!collapsed) {
-      const content = document.createElement('div');
-      content.className = 'session-folder-content';
-      const folderSessions = folders[folderName];
-      const folderExpanded = _expandedFolders[folderName];
-      const folderLimit = folderExpanded ? folderSessions.length : FOLDER_MAX_VISIBLE;
-      const visibleFolder = folderSessions.slice(0, folderLimit);
-
-      // Always include active session even if beyond limit
-      const activeInFolder = folderSessions.findIndex(s => s.id === currentSessionId);
-      if (!folderExpanded && activeInFolder >= folderLimit) {
-        visibleFolder.push(folderSessions[activeInFolder]);
-      }
-
-      _appendSessionItemsWithDateHeaders(content, visibleFolder);
-
-      if (folderSessions.length > FOLDER_MAX_VISIBLE) {
-        const rem = folderSessions.length - FOLDER_MAX_VISIBLE;
-        const moreBtn = document.createElement('button');
-        moreBtn.className = 'session-show-more-btn';
-        moreBtn.textContent = folderExpanded ? 'Show less' : `Show ${rem} more`;
-        moreBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          _expandedFolders[folderName] = !folderExpanded;
-          renderSessionList();
-        });
-        content.appendChild(moreBtn);
-      }
-
-      folderDiv.appendChild(content);
-    }
-
-    _frag.appendChild(folderDiv);
-  });
-
-  // Render unfiled sessions below folders (capped unless expanded)
-  const hasFolders = orderedFolderNames.length > 0;
-  const activeInUnfiled = unfiled.findIndex(s => s.id === currentSessionId);
-  const limit = _showAllSessions ? unfiled.length : SIDEBAR_MAX_VISIBLE;
-  const visibleUnfiled = unfiled.slice(0, limit);
-
-  // If active session is beyond the limit, include it
-  if (!_showAllSessions && activeInUnfiled >= limit) {
-    visibleUnfiled.push(unfiled[activeInUnfiled]);
-  }
-
-  // Wrap in "Unsorted" folder if real folders exist
-  let unfiledTarget = _frag;
-  if (hasFolders && unfiled.length > 0) {
-    const unsortedDiv = document.createElement('div');
-    unsortedDiv.className = 'session-folder unsorted-folder';
-    const unsortedHeader = document.createElement('div');
-    unsortedHeader.className = 'session-folder-header';
-    const unsortedCollapsed = loadFolderState()['__unsorted__'] === false;
-
-    const dragHandle = document.createElement('span');
-    dragHandle.className = 'folder-drag-handle';
-    dragHandle.textContent = '\u2630';
-    dragHandle.title = 'Drag to reorder folder';
-    unsortedHeader.appendChild(dragHandle);
-
-    const toggle = document.createElement('span');
-    toggle.className = 'folder-toggle';
-    toggle.textContent = unsortedCollapsed ? '\u25B6' : '\u25BC';
-    unsortedHeader.appendChild(toggle);
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'folder-name';
-    nameSpan.textContent = 'Unsorted';
-    unsortedHeader.appendChild(nameSpan);
-    const countSpan = document.createElement('span');
-    countSpan.className = 'folder-count';
-    countSpan.textContent = `(${unfiled.length})`;
-    unsortedHeader.appendChild(countSpan);
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'folder-delete-btn';
-    deleteBtn.textContent = '\u00d7';
-    deleteBtn.title = 'Delete all unsorted sessions';
-    deleteBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!await uiModule.styledConfirm(`Delete all ${unfiled.length} unsorted session(s)?`, { confirmText: 'Delete', danger: true })) return;
-      for (const s of unfiled) {
-        try {
-          await fetch(`${API_BASE}/api/session/${s.id}`, { method: 'DELETE' });
-          _deselectCurrentSession(s.id);
-        } catch (err) {
-          console.error('Failed to delete session:', s.id, err);
-        }
-      }
-      await loadSessions();
-    });
-    unsortedHeader.appendChild(deleteBtn);
-
-    unsortedHeader.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const state = loadFolderState();
-      state['__unsorted__'] = state['__unsorted__'] === false ? true : false;
-      saveFolderState(state);
-      renderSessionList();
-    });
-    unsortedDiv.appendChild(unsortedHeader);
-    if (!unsortedCollapsed) {
-      const content = document.createElement('div');
-      content.className = 'session-folder-content';
-      unfiledTarget = content;
-      unsortedDiv.appendChild(content);
-    }
-    _frag.appendChild(unsortedDiv);
-    if (unsortedCollapsed) {
-      unfiledTarget = null;
-    }
-  }
-
-  if (unfiledTarget) {
-    _appendSessionItemsWithDateHeaders(unfiledTarget, visibleUnfiled);
-  }
-
-  // "Show more" / "Show less" toggle
-  if (unfiledTarget && unfiled.length > SIDEBAR_MAX_VISIBLE) {
-    const remaining = unfiled.length - SIDEBAR_MAX_VISIBLE;
-    const toggleBtn = document.createElement('button');
-    toggleBtn.className = 'session-show-more-btn';
-    toggleBtn.textContent = _showAllSessions ? 'Show less' : `Show ${remaining} more`;
-    toggleBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _showAllSessions = !_showAllSessions;
-      renderSessionList();
-    });
-    unfiledTarget.appendChild(toggleBtn);
   }
 
   // Flush all built elements into the list in one operation
@@ -1939,6 +1915,21 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
     if (currentMetaEl) {
       currentMetaEl.textContent = meta ? meta.name : 'Odysseus Chat';
     }
+    const sessBtn = document.getElementById('claude-crumb-session-btn');
+    if (sessBtn) sessBtn.style.display = 'inline-flex';
+    const projWrap = document.getElementById('claude-crumb-project-wrap');
+    const projNameEl = document.getElementById('claude-crumb-project');
+    if (projWrap && projNameEl) {
+      if (meta && (meta.project_name || meta.project)) {
+        projNameEl.textContent = `Projects - ${meta.project_name || meta.project}`;
+        projWrap.style.display = 'inline-flex';
+      } else if (window.currentProject) {
+        projNameEl.textContent = `Projects - ${window.currentProject}`;
+        projWrap.style.display = 'inline-flex';
+      } else {
+        projWrap.style.display = 'none';
+      }
+    }
     // Update model picker visibility
     updateModelPicker();
     if (window.refreshChatContextHeader) window.refreshChatContextHeader('select-session');
@@ -2221,6 +2212,8 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
 
   // Don't hit the API — just store the model info and prepare the UI
   _pendingChat = { url, modelId, endpointId, source: incomingSource };
+  // New chat: unload every local model except the one it will use.
+  releaseLocalModels(modelId);
   _pendingMaterializePromise = null;
   _skipAutoSelect = true;
   _suppressNextSessionLoading = true;
@@ -2260,6 +2253,12 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
   if (metaEl) {
     metaEl.textContent = 'New Chat';
   }
+  const sessBtn = document.getElementById('claude-crumb-session-btn');
+  if (sessBtn) sessBtn.style.display = 'none';
+  const projWrap = document.getElementById('claude-crumb-project-wrap');
+  if (projWrap) projWrap.style.display = 'none';
+  const stepBadge = document.getElementById('claude-step-badge');
+  if (stepBadge) stepBadge.style.display = 'none';
 
   // Enable input
   const msgInput = document.getElementById('message');
@@ -2292,6 +2291,9 @@ export async function materializePendingSession() {
     }
     if (pending.endpointId) {
       fd.append('endpoint_id', pending.endpointId);
+    }
+    if (window.currentProject) {
+      fd.append('folder', window.currentProject);
     }
 
     let res;
@@ -3195,7 +3197,7 @@ export function openLibrary(defaultTab) {
     <div class="modal-content doclib-modal-content">
       <div class="modal-header">
         <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>Library <span id="lib-stats" style="font-size:0.8em;opacity:0.5;font-weight:normal;margin-left:4px"></span></h4>
-        <button class="close-btn" id="lib-close">✖</button>
+        <button class="close-btn" id="lib-close" aria-label="Close library"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <div class="modal-body">
         <div class="lib-tabs" id="lib-tabs">
@@ -3565,7 +3567,7 @@ export function openArchive() {
     <div class="modal-content doclib-modal-content">
       <div class="modal-header">
         <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>Archive <span id="archive-stats" style="font-size:0.8em;opacity:0.5;font-weight:normal;margin-left:4px"></span></h4>
-        <button class="close-btn" id="archive-close">✖</button>
+        <button class="close-btn" id="archive-close" aria-label="Close archive"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <div class="modal-body">
         <div class="doclib-chips" id="archive-chips"></div>
@@ -3681,7 +3683,10 @@ const sessionModule = {
   setSessionHasDocs,
   getSortMode,
   setSortMode,
-  deleteCurrentSessionFromTopMenu
+  deleteCurrentSessionFromTopMenu,
+  promptCreateProject,
+  newChatInProject,
+  loadAllProjectFolders
 };
 
 export { updateModelPicker };

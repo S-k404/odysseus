@@ -34,6 +34,9 @@ _IMPORT_REWRITES = {
     ),
     "import themeModule from './theme.js';": "import themeModule from './theme.mjs';",
     "import spinnerModule from './spinner.js';": "import spinnerModule from './spinner.mjs';",
+    "import { releaseLocalModels } from './localModels.js';": (
+        "import { releaseLocalModels } from './localModels.mjs';"
+    ),
 }
 
 _STUBS = {
@@ -71,6 +74,7 @@ export default ui;
     ),
     "theme.mjs": "export default {};\n",
     "spinner.mjs": "export default {};\n",
+    "localModels.mjs": "export const releaseLocalModels = () => {};\n",
 }
 
 _HARNESS = r"""

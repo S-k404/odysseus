@@ -27,21 +27,24 @@ export const THEMES = {
                 advanced: { sendBtnBg: '#949494', sendBtnHover: '#7f7f7f',
                             userBubbleBg: '#2f2f2f', aiBubbleBg: '#171717',
                             inputBg: '#2f2f2f', brandColor: '#ffffff', brandMixTo: '#ffffff' } },
-  claude:     { bg:'#262624', fg:'#f5f4f0', panel:'#30302e', border:'#4a4a47', red:'#c6613f' },
+  claude:     { bg:'#191919', fg:'#f4f4f5', panel:'#141416', border:'#27272a', red:'#d97757',
+                advanced: { sendBtnBg: '#f4f4f5', sendBtnHover: '#ffffff',
+                            userBubbleBg: '#252528', aiBubbleBg: 'transparent',
+                            inputBg: '#252528', brandColor: '#d97757', brandMixTo: '#d97757' } },
   cute:       { bg:'#fff0f5', fg:'#d4608a', panel:'#fff8fa', border:'#f0c0d0', red:'#ff6b9d' },
 };
 
-const DEFAULT_THEME = 'dark';
+const DEFAULT_THEME = 'claude';
 const LS_KEY = 'odysseus-theme';
 const CUSTOM_THEMES_KEY = 'odysseus-custom-themes';
 
 const FONT_MAP = {
   mono: "'Fira Code', monospace",
-  sans: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+  sans: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif",
   serif: "Georgia, 'Times New Roman', serif",
   opendyslexic: "'OpenDyslexic', sans-serif",
 };
-const DEFAULT_FONT = 'mono';
+const DEFAULT_FONT = 'sans';
 const DEFAULT_DENSITY = 'comfortable';
 const MAX_CUSTOM_THEMES = 8;
 

@@ -2,6 +2,7 @@
 """Multi-provider Speech-to-Text service — dispatches to local Whisper, OpenAI-compatible API, or browser."""
 
 import io
+import os
 import logging
 import httpx
 import tempfile
@@ -30,11 +31,20 @@ class STTService:
     def _load_settings(self) -> dict:
         from src.settings import load_settings
         saved = load_settings()
+        env_enabled = os.getenv("STT_ENABLED")
+        stt_enabled = (env_enabled.lower() in ("true", "1", "yes")) if env_enabled is not None else saved.get("stt_enabled", False)
+        stt_provider = os.getenv("STT_PROVIDER") or saved.get("stt_provider", "disabled")
+        stt_model = os.getenv("STT_MODEL") or saved.get("stt_model", "base")
+        stt_language = os.getenv("STT_LANGUAGE") or saved.get("stt_language", "")
+        openai_base = os.getenv("STT_OPENAI_API_BASE", "")
+        openai_key = os.getenv("STT_OPENAI_API_KEY", "")
         return {
-            "stt_enabled": saved.get("stt_enabled", False),
-            "stt_provider": saved.get("stt_provider", "disabled"),
-            "stt_model": saved.get("stt_model", "base"),
-            "stt_language": saved.get("stt_language", ""),
+            "stt_enabled": stt_enabled,
+            "stt_provider": stt_provider,
+            "stt_model": stt_model,
+            "stt_language": stt_language,
+            "openai_api_base": openai_base,
+            "openai_api_key": openai_key,
         }
 
     @property
@@ -49,7 +59,9 @@ class STTService:
             return True  # handled client-side
         if provider == "local":
             return self._get_whisper() is not None
-        if provider.startswith("endpoint:"):
+        if provider == "openai":
+            return bool(settings.get("openai_api_base") or os.getenv("STT_OPENAI_API_BASE"))
+        if isinstance(provider, str) and provider.startswith("endpoint:"):
             return True  # assume reachable
         return False
 
@@ -151,6 +163,28 @@ class STTService:
             logger.error(f"API STT transcription failed: {e}")
             return None
 
+    def _transcribe_openai(self, audio_bytes: bytes, base_url: str, api_key: str, model: str, language: str = "") -> Optional[str]:
+        url = base_url.rstrip("/") + "/audio/transcriptions"
+        headers = {}
+        if api_key and api_key != "not-needed":
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        files = {"file": ("audio.webm", io.BytesIO(audio_bytes), "audio/webm")}
+        data = {"model": model or "Systran/faster-whisper-small"}
+        if language:
+            data["language"] = language
+
+        try:
+            r = httpx.post(url, headers=headers, files=files, data=data, timeout=60)
+            r.raise_for_status()
+            result = r.json()
+            text = result.get("text", "")
+            logger.info(f"OpenAI STT: {len(text)} chars from {base_url}")
+            return text
+        except Exception as e:
+            logger.error(f"OpenAI STT transcription failed: {e}")
+            return None
+
     # ── Public interface ──
 
     def transcribe(self, audio_bytes: bytes) -> Optional[str]:
@@ -166,7 +200,11 @@ class STTService:
 
         if provider == "local":
             return self._transcribe_local(audio_bytes, language)
-        elif provider.startswith("endpoint:"):
+        elif provider == "openai":
+            base_url = settings.get("openai_api_base") or os.getenv("STT_OPENAI_API_BASE", "http://speaches:8000/v1")
+            api_key = settings.get("openai_api_key") or os.getenv("STT_OPENAI_API_KEY", "")
+            return self._transcribe_openai(audio_bytes, base_url, api_key, model, language)
+        elif isinstance(provider, str) and provider.startswith("endpoint:"):
             endpoint_id = provider.split(":", 1)[1]
             return self._transcribe_api(audio_bytes, endpoint_id, model, language)
         else:

@@ -602,6 +602,18 @@ def _session_is_research_spinoff(sess) -> bool:
     return False
 
 
+def apply_context_limit(model_context: int, requested: Optional[int]) -> int:
+    """Apply the composer's Context setting as a limit.
+
+    It can shrink the window (to keep prompts small and fast) but never grow
+    it past what the model is served with; history trimmed for a window the
+    model doesn't have overflows it instead.
+    """
+    if requested and requested > 0:
+        return min(model_context, requested) if model_context else requested
+    return model_context
+
+
 async def build_chat_context(
     sess,
     request,
@@ -626,6 +638,7 @@ async def build_chat_context(
     defer_context_shaping: bool = False,
     continuation_context_message: str | None = None,
     persist_user_message: bool = True,
+    requested_context_length: Optional[int] = None,
 ) -> ChatContext:
     """Build the full context (preface + messages) for an LLM call.
 
@@ -787,13 +800,21 @@ async def build_chat_context(
     # for every candidate. Running selected-model compaction here would mutate
     # session history before we know which route can answer and would make a
     # later larger-context candidate unable to recover discarded history.
+    base_context = get_context_length(sess.endpoint_url, sess.model)
+    context_length = apply_context_limit(base_context, requested_context_length)
     if defer_context_shaping:
-        context_length = get_context_length(sess.endpoint_url, sess.model)
         was_compacted = False
     else:
-        messages, context_length, was_compacted = await maybe_compact(
-            sess, sess.endpoint_url, sess.model, messages, sess.headers, owner=user,
-        )
+        try:
+            messages, context_length, was_compacted = await maybe_compact(
+                sess, sess.endpoint_url, sess.model, messages, sess.headers, owner=user,
+                target_context_length=context_length,
+            )
+        except TypeError:
+            messages, context_length, was_compacted = await maybe_compact(
+                sess, sess.endpoint_url, sess.model, messages, sess.headers, owner=user,
+            )
+    context_length = apply_context_limit(context_length, requested_context_length)
     _before_trim_messages = len(messages)
     _before_trim_tokens = estimate_tokens(messages)
     if not defer_context_shaping:

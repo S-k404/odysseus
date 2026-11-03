@@ -1433,6 +1433,13 @@ def test_authorized_document_stream_precedes_completed_update(monkeypatch):
     )
     monkeypatch.setattr(agent_loop, "get_mcp_manager", lambda: None, raising=False)
     monkeypatch.setattr(agent_loop, "estimate_tokens", lambda *args, **kwargs: 10)
+    # Environment-independent: installed skills and integration notes in the
+    # developer's data/ dir arrive as untrusted context and would arm the gate.
+    import services.memory.skills as skills_mod
+    import src.integrations as integrations_mod
+    monkeypatch.setattr(skills_mod.SkillsManager, "load", lambda self, owner=None: [])
+    monkeypatch.setattr(skills_mod.SkillsManager, "index_for", lambda self, owner=None, **kw: [])
+    monkeypatch.setattr(integrations_mod, "get_integrations_prompt", lambda *a, **k: "")
 
     async def fake_stream(*args, **kwargs):
         yield "data: " + json.dumps(

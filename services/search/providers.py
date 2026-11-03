@@ -11,7 +11,13 @@ from bs4 import BeautifulSoup
 
 from src.constants import SEARXNG_INSTANCE, REQUEST_TIMEOUT, WEB_FETCH_USER_AGENT
 from .analytics import RateLimitError, error_logger
-from .query import build_enhanced_query
+from .query import (
+    build_enhanced_query,
+    is_academic_query,
+    sanitize_research_query,
+    ACADEMIC_SEARXNG_CATEGORIES,
+    ACADEMIC_DOMAIN_FILTERS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +139,17 @@ _GENERAL_ENGINES = os.environ.get("SEARXNG_GENERAL_ENGINES", "bing,mojeek,presea
 
 
 def searxng_search_api(query: str, count: Optional[int] = None, categories: str = "general",
-                       time_filter: Optional[str] = None) -> List[dict]:
-    """Search using SearXNG JSON API. Returns list of {title, url, snippet}."""
+                       time_filter: Optional[str] = None,
+                       research_mode: bool = False) -> List[dict]:
+    """Search using SearXNG JSON API. Returns list of {title, url, snippet}.
+
+    When ``research_mode=True`` the function applies academic-query guardrails:
+    - Consumer stop-words (top/best/buy/news/local) are stripped from the query
+      so e-commerce and clickbait results don't contaminate academic loops.
+    - If the cleaned query is detected as academic/technical (presence of
+      signals like 'arxiv', 'neural', 'benchmark', etc.) the SearXNG category
+      is overridden to ``science,it`` and optional domain filters are appended.
+    """
     count = count if count is not None else _get_result_count()
     instance = _get_search_instance()
     api_key = ""
@@ -151,25 +166,48 @@ def searxng_search_api(query: str, count: Optional[int] = None, categories: str 
     # languages and brand-ambiguous terms bleed in foreign SEO pages (e.g.
     # "Odyssey" → Honda Japan, "Trojan" → Japanese malware blogs, "Polyphemus"
     # → Chinese math forums). The news path already did this; general didn't.
+    # ── Research-mode query sanitisation ────────────────────────────────
+    # Sanitize and potentially re-route the query when we're inside a deep
+    # research loop. Do this before building params so the cleaned query
+    # is used everywhere (logging, cache keys, the actual HTTP request).
+    effective_categories = categories
+    if research_mode:
+        clean_query = sanitize_research_query(query)
+        if clean_query != query:
+            logger.info(
+                "SearXNG research: stop-words stripped from query %r -> %r",
+                query, clean_query,
+            )
+        query = clean_query
+        # Auto-route academic/technical queries to science+it categories.
+        if categories == "general" and is_academic_query(query):
+            effective_categories = ACADEMIC_SEARXNG_CATEGORIES
+            logger.info(
+                "SearXNG research: academic query detected — routing to %r",
+                effective_categories,
+            )
+
     params = {
         "q": query,
         "format": "json",
         "language": "en",
+        "locale": "en-US",   # prevent geo-IP bias toward regional portals
         "safesearch": _safesearch_for("searxng"),
     }
     q_lc = query.lower()
     is_news = time_filter is not None or any(h in q_lc for h in _NEWS_HINTS)
-    if is_news and categories == "general":
+    if is_news and effective_categories == "general":
         params["categories"] = "news"
         if time_filter in ("day", "week", "month", "year"):
             # 'day' is too sparse on most SearXNG news engines — widen to a week
             # so there's enough volume; the news category already biases recent.
             params["time_range"] = "week" if time_filter in ("day", "week") else time_filter
     else:
-        params["categories"] = categories
-        # Route general queries to engines that aren't blocked (default general
-        # set returns 0 on this instance — see _GENERAL_ENGINES).
-        if categories == "general" and _GENERAL_ENGINES:
+        params["categories"] = effective_categories
+        # For academic/technical categories, no engine pin needed — the science
+        # and it categories already use appropriate engines. For general queries
+        # route to the known-good engines.
+        if effective_categories == "general" and _GENERAL_ENGINES:
             params["engines"] = _GENERAL_ENGINES
     try:
         def _parse_results(results):

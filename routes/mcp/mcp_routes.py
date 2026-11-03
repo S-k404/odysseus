@@ -125,7 +125,9 @@ def setup_mcp_routes(mcp_manager: McpManager):
         try:
             servers = db.query(McpServer).all()
             result = []
+            seen_ids = set()
             for srv in servers:
+                seen_ids.add(srv.id)
                 status = mcp_manager.get_server_status(srv.id)
                 oauth_cfg = json.loads(srv.oauth_config) if srv.oauth_config else None
                 needs_oauth = False
@@ -142,6 +144,7 @@ def setup_mcp_routes(mcp_manager: McpManager):
                     "env": json.loads(srv.env) if srv.env else {},
                     "url": srv.url,
                     "is_enabled": srv.is_enabled,
+                    "is_builtin": False,
                     "status": status.get("status", "disconnected"),
                     "tool_count": total_tools,
                     "disabled_tool_count": len(disabled_list),
@@ -151,6 +154,33 @@ def setup_mcp_routes(mcp_manager: McpManager):
                     "has_oauth": oauth_cfg is not None,
                     "needs_oauth": needs_oauth,
                 })
+
+            # Merge built-in connected servers
+            all_statuses = mcp_manager.get_all_statuses()
+            for srv_id, s_info in all_statuses.items():
+                if srv_id not in seen_ids:
+                    tools = s_info.get("tools") or []
+                    tool_count = s_info.get("tool_count") or (len(tools) if isinstance(tools, list) else 0)
+                    result.append({
+                        "id": srv_id,
+                        "name": s_info.get("name", srv_id),
+                        "transport": s_info.get("transport", "stdio"),
+                        "command": s_info.get("command", "python"),
+                        "args": s_info.get("args", []),
+                        "env": {},
+                        "url": s_info.get("url"),
+                        "is_enabled": True,
+                        "is_builtin": True,
+                        "status": s_info.get("status", "connected"),
+                        "tool_count": tool_count,
+                        "disabled_tool_count": 0,
+                        "enabled_tool_count": tool_count,
+                        "error": s_info.get("error"),
+                        "auth_url": s_info.get("auth_url"),
+                        "has_oauth": False,
+                        "needs_oauth": False,
+                    })
+
             return result
         finally:
             db.close()
@@ -383,12 +413,16 @@ def setup_mcp_routes(mcp_manager: McpManager):
         """List all tools for a specific MCP server with enabled/disabled state."""
         require_admin(request)
         db = SessionLocal()
+        disabled_set = set()
         try:
             srv = db.query(McpServer).filter(McpServer.id == server_id).first()
-            if not srv:
+            if srv and srv.disabled_tools:
+                try:
+                    disabled_set = set(json.loads(srv.disabled_tools))
+                except Exception:
+                    pass
+            elif not srv and server_id not in mcp_manager.get_all_statuses():
                 raise HTTPException(404, "Server not found")
-            disabled_list = json.loads(srv.disabled_tools) if srv.disabled_tools else []
-            disabled_set = set(disabled_list)
         finally:
             db.close()
 

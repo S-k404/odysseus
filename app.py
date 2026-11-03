@@ -47,6 +47,11 @@ from dotenv import load_dotenv
 # utf-8-sig reads plain UTF-8 (no BOM) identically, so this is safe everywhere.
 load_dotenv(encoding="utf-8-sig")
 
+# .env is shared with the Docker stack; outside a container, point service
+# names like http://speaches:8000 at the ports Docker publishes on 127.0.0.1.
+from src import native_hosts as _native_hosts
+_native_hosts.apply()
+
 import asyncio
 import logging
 import secrets
@@ -670,6 +675,7 @@ from routes.upload_routes import setup_upload_routes
 upload_router, upload_cleanup_func = setup_upload_routes(upload_handler)
 app.include_router(upload_router)
 upload_cleanup_task = None
+instance_lock = None
 
 # Emoji SVG proxy (same-origin, lazy-cached Twemoji) — lets the chat render
 # emojis as flat SVG instead of system color glyphs.
@@ -742,6 +748,10 @@ app.include_router(setup_embedding_routes())
 # Models
 from routes.model_routes import setup_model_routes
 app.include_router(setup_model_routes(model_discovery))
+
+# Free local model RAM on model switch / new chat
+from routes.local_model_routes import setup_local_model_routes
+app.include_router(setup_local_model_routes())
 
 # GitHub Copilot device-flow login
 from routes.copilot_routes import setup_copilot_routes
@@ -1030,8 +1040,15 @@ app.router.lifespan_context = _lifespan
 
 
 async def _startup_event():
-    global upload_cleanup_task
+    global upload_cleanup_task, instance_lock
     logger.info("Application starting up...")
+    # Refuse to share the data directory with another live server (e.g. the
+    # Docker copy and the Mac app): both would run the scheduler and pollers.
+    from src import instance_lock as _instance_lock
+    if _instance_lock.enabled():
+        instance_lock = _instance_lock.InstanceLock(DATA_DIR, port=os.environ.get("APP_PORT"))
+        instance_lock.acquire()
+        instance_lock.start_heartbeat()
     webhook_manager.set_loop(asyncio.get_running_loop())
     # Wipe any leftover incognito sessions from previous process — they're
     # ephemeral by design and must not survive a restart.
@@ -1293,6 +1310,8 @@ async def _shutdown_event():
         await mcp_manager.disconnect_all()
     except Exception as e:
         logger.warning(f"MCP shutdown error: {e}")
+    if instance_lock:
+        await instance_lock.release()
     logger.info("Application shutdown complete")
 
 

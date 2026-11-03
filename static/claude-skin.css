@@ -1,0 +1,1800 @@
+/* ==========================================================================
+   Claude Skin & Layout Refinements
+   Exact match for Claude Desktop / Web UI specifications
+   ========================================================================== */
+
+/* ── 1. macOS Window Traffic Lights Clearance & Sidebar Header ── */
+.sidebar-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  padding: 10px 14px 6px 78px !important; /* 78px reserves native macOS traffic lights (🔴 🟡 🟢) */
+  min-height: 42px !important;
+  height: 42px !important;
+  background: var(--sidebar-bg, var(--panel)) !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+  position: relative;
+  z-index: 3;
+}
+
+/* Hide brand text from top-left header — brand only belongs on #welcome-screen */
+.sidebar-header .sidebar-brand {
+  display: none !important;
+}
+
+/* Sidebar toggle button (vector Claude sidebar icon) inside header */
+.sidebar-hamburger {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sidebar-hamburger:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+
+/* External fixed #hamburger-btn: HIDE when sidebar is OPEN */
+#hamburger-btn,
+.hamburger-btn {
+  top: 9px !important;
+  left: 78px !important; /* Always clear of macOS traffic lights */
+}
+
+body:not(.sidebar-collapsed) #hamburger-btn,
+body:has(#sidebar:not(.hidden)) #hamburger-btn,
+body:not(.sidebar-collapsed) .hamburger-btn {
+  display: none !important;
+}
+
+/* External fixed #hamburger-btn: SHOW when sidebar is COLLAPSED (clear of traffic lights) */
+body.sidebar-collapsed #hamburger-btn,
+body:has(#sidebar.hidden) #hamburger-btn {
+  display: flex !important;
+  position: fixed !important;
+  top: 9px !important;
+  left: 78px !important; /* Placed cleanly to the right of traffic lights */
+  right: auto !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 6px !important;
+  z-index: 210 !important;
+  background: transparent !important;
+  border: none !important;
+  color: color-mix(in srgb, var(--fg) 62%, transparent) !important;
+  opacity: 0.85 !important;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+body.sidebar-collapsed #hamburger-btn:hover,
+body:has(#sidebar.hidden) #hamburger-btn:hover {
+  opacity: 1 !important;
+  background: color-mix(in srgb, var(--fg) 8%, transparent) !important;
+  color: var(--fg) !important;
+}
+
+/* ── 2. Top Bar & Breadcrumbs ── */
+.claude-chat-top-bar {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  padding: 0 16px !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent) !important;
+  background: transparent !important;
+  position: relative;
+  z-index: 20;
+}
+
+/* When sidebar is collapsed, add clearance on the left for traffic lights and toggle button */
+body.sidebar-collapsed .claude-chat-top-bar {
+  padding-left: 114px !important;
+}
+
+.claude-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+}
+
+.claude-crumb-project-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+}
+
+.claude-crumb-project {
+  color: color-mix(in srgb, var(--fg) 88%, transparent);
+  font-weight: 500;
+}
+
+.claude-crumb-sep {
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+  margin: 0 2px;
+}
+
+.claude-crumb-session-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.claude-crumb-session-btn:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg);
+}
+
+.claude-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.claude-step-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--fg) 88%, transparent);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.claude-step-badge:hover {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.claude-step-badge.hidden,
+.claude-step-badge[style*="display: none"] {
+  display: none !important;
+}
+
+.claude-share-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--fg) 88%, transparent);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.claude-share-btn:hover {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg);
+}
+
+/* ── 3. Progress Sidebar Panel ── */
+.claude-progress-sidebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 300px;
+  background: var(--panel);
+  border-left: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  z-index: 220;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.25s ease;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.3);
+}
+
+.claude-progress-sidebar.hidden {
+  display: none !important;
+}
+
+.claude-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.claude-progress-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0;
+}
+
+.claude-progress-close-btn {
+  background: transparent;
+  border: none;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.claude-progress-close-btn:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.claude-progress-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.claude-stepper-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.claude-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 12.5px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+}
+
+.claude-step-item.active {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.claude-step-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--fg) 22%, var(--panel));
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.claude-step-item.active .claude-step-dot {
+  background: var(--brand-color, var(--accent, var(--red)));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent, var(--red)) 50%, transparent);
+}
+
+.claude-session-context-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.claude-session-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  border-radius: 6px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--fg) 88%, transparent);
+  margin-bottom: 6px;
+}
+
+.claude-session-ctx-label {
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+}
+
+.claude-session-ctx-val {
+  color: var(--fg);
+  margin-left: auto;
+  font-size: 11.5px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 4. Claude Sidebar Actions & Navigation ── */
+.claude-sidebar-top-actions {
+  padding: 4px 8px 10px 8px;
+}
+
+.claude-sidebar-new-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 8px;
+  padding: 7px 12px;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.claude-sidebar-new-btn:hover {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  border-color: var(--border);
+}
+
+.claude-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: color-mix(in srgb, var(--fg) 88%, transparent);
+  font-size: 13px;
+  font-weight: 450;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-bottom: 1px;
+}
+
+.claude-nav-item:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg);
+}
+
+.claude-nav-icon {
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  flex-shrink: 0;
+}
+
+.claude-kbd {
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+}
+
+.claude-sidebar-section-header {
+  padding: 14px 10px 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+  letter-spacing: 0.5px;
+}
+
+/* ── 5. Claude Sidebar User Bar & Account Menu ── */
+.claude-sidebar-user-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  background: var(--sidebar-bg, var(--panel));
+  position: relative;
+}
+
+.claude-user-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent, var(--red)), #d19a66);
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.claude-user-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  margin: 0 6px;
+}
+
+.claude-user-chevron {
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+  transition: transform 0.15s;
+}
+
+.claude-account-menu {
+  position: absolute;
+  bottom: 52px;
+  left: 8px;
+  width: 240px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 6px 0;
+  z-index: 1000;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.claude-account-menu.hidden {
+  display: none !important;
+}
+
+.claude-account-menu-header {
+  padding: 8px 14px;
+  font-size: 12.5px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-account-item {
+  width: calc(100% - 8px);
+  margin: 1px 4px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 450;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.claude-account-item:hover,
+.claude-account-item.active {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+
+.claude-menu-separator {
+  height: 1px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  margin: 4px 0;
+}
+
+/* ── 6. Odysseus Composer Input Bar (Exact match for Image 1) ── */
+/* The card is .chat-input-box; style.css still paints the old bar as a box,
+   which drew a second border around the card. */
+.chat-input-bar {
+  max-width: 840px;
+  margin: 0 auto 12px auto;
+  padding: 0 16px;
+  position: relative;
+  z-index: 25;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.chat-input-box {
+  background: var(--panel) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 16px !important;
+  padding: 12px 14px 10px 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25) !important;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.chat-input-box:focus-within {
+  border-color: var(--border) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 10%, transparent), 0 6px 20px rgba(0, 0, 0, 0.35) !important;
+}
+
+.chat-input-top {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+#message {
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+  color: var(--fg) !important;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  resize: none !important;
+  flex: 1 !important;
+  padding: 2px 0 !important;
+}
+
+#message::placeholder {
+  color: color-mix(in srgb, var(--fg) 45%, transparent) !important;
+}
+
+/* Model picker top-right in composer (Image 1) */
+.ody-composer-model {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 3px 8px !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  border: none !important;
+  color: color-mix(in srgb, var(--fg) 88%, transparent) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ody-composer-model:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent) !important;
+  color: var(--fg) !important;
+}
+
+.ody-model-chevron {
+  color: color-mix(in srgb, var(--fg) 45%, transparent) !important;
+}
+
+/* Bottom row in composer card */
+.chat-input-bottom {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+.chat-input-left {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.ody-overflow-caret {
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  border: none !important;
+  color: color-mix(in srgb, var(--fg) 62%, transparent) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: all 0.15s;
+}
+
+.ody-overflow-caret:hover {
+  color: var(--fg) !important;
+  background: color-mix(in srgb, var(--fg) 8%, transparent) !important;
+}
+
+.ody-search-btn {
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  border: none !important;
+  color: color-mix(in srgb, var(--fg) 62%, transparent) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: all 0.15s;
+}
+
+.ody-search-btn:hover {
+  color: var(--fg) !important;
+  background: color-mix(in srgb, var(--fg) 8%, transparent) !important;
+}
+
+.ody-search-btn[aria-pressed="true"] {
+  color: var(--accent, var(--red)) !important;
+  background: color-mix(in srgb, var(--accent, var(--red)) 14%, transparent) !important;
+}
+
+/* Thinking & Context Pills (Exact match for Image 1) */
+.ody-composer-pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 4px 10px !important;
+  border-radius: 9999px !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  transition: all 0.15s;
+  user-select: none !important;
+  line-height: 1 !important;
+}
+
+.ody-composer-pill.thinking-pill {
+  background: color-mix(in srgb, var(--accent, var(--red)) 14%, transparent) !important;
+  color: var(--accent, var(--red)) !important;
+  border: 1px solid color-mix(in srgb, var(--accent, var(--red)) 28%, transparent) !important;
+}
+
+.ody-composer-pill.thinking-pill:hover {
+  background: color-mix(in srgb, var(--accent, var(--red)) 22%, transparent) !important;
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 40%, transparent) !important;
+}
+
+.ody-composer-pill.context-pill {
+  background: color-mix(in srgb, var(--fg) 5%, transparent) !important;
+  color: color-mix(in srgb, var(--fg) 62%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent) !important;
+}
+
+.ody-composer-pill.context-pill:hover {
+  background: color-mix(in srgb, var(--fg) 9%, transparent) !important;
+  color: var(--fg) !important;
+  border-color: var(--border) !important;
+}
+
+.ody-lightning-icon {
+  color: var(--accent-warm, #d19a66) !important;
+}
+
+/* Right side in composer (Image 1) */
+.chat-input-right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+/* Segmented Agent | Chat Switch (Image 1) */
+.mode-toggle {
+  display: inline-flex !important;
+  align-items: center !important;
+  background: color-mix(in srgb, var(--fg) 6%, var(--panel)) !important;
+  padding: 2px !important;
+  border-radius: 8px !important;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent) !important;
+}
+
+.mode-toggle-btn {
+  padding: 3px 9px !important;
+  border-radius: 6px !important;
+  border: none !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: color-mix(in srgb, var(--fg) 62%, transparent) !important;
+  background: transparent !important;
+  cursor: pointer !important;
+  transition: all 0.15s !important;
+}
+
+.mode-toggle-btn:hover {
+  color: var(--fg) !important;
+}
+
+.mode-toggle-btn.active {
+  background: color-mix(in srgb, var(--fg) 16%, var(--panel)) !important;
+  color: var(--fg) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important;
+}
+
+/* Mic / Send Button (Image 1: rounded reddish-brown mic button when empty) */
+.send-btn {
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  border-radius: 8px !important;
+  border: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: all 0.15s !important;
+}
+
+.send-btn.mic-mode {
+  background: color-mix(in srgb, var(--accent, var(--red)) 40%, transparent) !important;
+  color: var(--accent, var(--red)) !important;
+}
+
+.send-btn.mic-mode:hover {
+  background: color-mix(in srgb, var(--accent, var(--red)) 55%, transparent) !important;
+  color: var(--fg) !important;
+}
+
+.send-btn[data-mode="send"],
+.send-btn:not(.mic-mode):not(.newchat-mode) {
+  background: var(--fg) !important;
+  color: var(--panel) !important;
+}
+
+.send-btn[data-mode="send"]:hover,
+.send-btn:not(.mic-mode):not(.newchat-mode):hover {
+  opacity: 0.9 !important;
+}
+
+/* Disclaimer centered below the box */
+.chat-footer-disclaimer {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin-top: 8px !important;
+  font-size: 11.5px !important;
+  color: color-mix(in srgb, var(--fg) 45%, transparent) !important;
+  text-align: center !important;
+  user-select: none !important;
+}
+
+/* Model picker popover (Claude-style menu) */
+.model-picker-menu {
+  width: 360px !important;
+  min-width: 0 !important;
+  max-width: calc(100vw - 32px) !important;
+  padding: 6px !important;
+  background: var(--panel) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45) !important;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.model-picker-menu:not(.hidden) {
+  display: flex !important;
+  flex-direction: column;
+}
+
+.mp-tabs-bar {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 6px;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border-radius: 8px;
+}
+
+.mp-tab-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mp-tab-btn:hover {
+  color: var(--fg);
+}
+
+.mp-tab-btn.active {
+  background: color-mix(in srgb, var(--fg) 16%, var(--panel));
+  color: var(--fg);
+}
+
+.mp-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(380px, 55vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.mp-view.hidden {
+  display: none;
+}
+
+.claude-tiers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.claude-tier-card {
+  padding: 8px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.claude-tier-card:hover {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+
+.claude-tier-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.claude-tier-header .tier-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.claude-tier-header .tier-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.claude-tier-header .tier-text {
+  min-width: 0;
+}
+
+.claude-tier-header .tier-name {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.claude-tier-header .tier-desc {
+  margin-top: 2px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.claude-tier-versions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 0 26px;
+}
+
+.tier-ver-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--fg) 88%, transparent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.tier-ver-chip:hover {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.tier-ver-chip .ver-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tier-ver-chip .ver-tag {
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.tier-ver-chip.active {
+  background: color-mix(in srgb, var(--accent, var(--red)) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 45%, transparent);
+  color: var(--fg);
+}
+
+.tier-ver-chip.active .ver-tag {
+  color: var(--accent, var(--red));
+}
+
+.tier-ver-chip.stale {
+  opacity: 0.55;
+}
+
+.claude-tiers-empty {
+  padding: 16px 10px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Hide redundant Chats accordion header in sidebar */
+#sessions-section > .section-header-flex {
+  display: none !important;
+}
+
+
+
+/* ── 7. Claude Project Folders (Matches Screenshot 3) ── */
+.claude-sidebar-section-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 12px 10px 4px 10px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  color: color-mix(in srgb, var(--fg) 45%, transparent) !important;
+  letter-spacing: 0.5px !important;
+  user-select: none;
+}
+
+.claude-add-project-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.claude-add-project-btn:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+
+.claude-project-item {
+  margin-bottom: 2px;
+}
+
+.claude-project-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: color-mix(in srgb, var(--fg) 88%, transparent);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+  user-select: none;
+}
+
+.claude-project-header:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg);
+}
+
+.claude-project-icon {
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.claude-project-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-project-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.claude-project-header:hover .claude-project-actions {
+  display: flex;
+}
+
+.claude-project-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  cursor: pointer;
+  padding: 0;
+}
+
+.claude-project-btn:hover {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--fg);
+}
+
+.claude-project-chevron {
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+  display: flex;
+  align-items: center;
+  transition: transform 0.15s ease;
+}
+
+.claude-project-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+
+.claude-project-sessions {
+  display: flex;
+  flex-direction: column;
+  padding-left: 14px;
+  margin-left: 12px;
+  border-left: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  margin-top: 2px;
+  margin-bottom: 4px;
+}
+
+.claude-project-sessions .list-item {
+  padding-left: 8px !important;
+  font-size: 12.5px !important;
+  margin-bottom: 1px !important;
+}
+
+.claude-project-empty-action {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: all 0.15s;
+}
+
+.claude-project-empty-action:hover {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  color: color-mix(in srgb, var(--fg) 88%, transparent);
+}
+
+/* ── 8. Collapsible Thinking & Tool Nodes (Matches Screenshot 6) ── */
+.thinking-section {
+  border: none !important;
+  background: transparent !important;
+  margin: 8px 0 12px 0 !important;
+  border-radius: 0 !important;
+}
+
+.thinking-header {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 4px 0 !important;
+  background: transparent !important;
+  border: none !important;
+  color: color-mix(in srgb, var(--fg) 62%, transparent) !important;
+  font-size: 13px !important;
+  font-weight: 450 !important;
+  cursor: pointer !important;
+  transition: color 0.15s !important;
+}
+
+.thinking-header:hover {
+  color: var(--fg) !important;
+  background: transparent !important;
+}
+
+.thinking-header .chevron {
+  color: color-mix(in srgb, var(--fg) 45%, transparent) !important;
+  transition: transform 0.15s ease !important;
+}
+
+.thinking-content {
+  border-left: 2px solid var(--border) !important;
+  padding-left: 14px !important;
+  margin: 6px 0 10px 4px !important;
+  color: color-mix(in srgb, var(--fg) 62%, transparent) !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+  background: transparent !important;
+  border-top: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+}
+
+/* Tool execution pills / nodes (Matches Screenshot 6) */
+.tool-call-node,
+.tool-execution-block {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 4px 0 !important;
+  background: transparent !important;
+  border: none !important;
+  color: color-mix(in srgb, var(--fg) 62%, transparent) !important;
+  font-size: 13px !important;
+  font-weight: 450 !important;
+  cursor: pointer !important;
+  margin: 4px 0 !important;
+}
+
+.tool-call-node:hover,
+.tool-execution-block:hover {
+  color: var(--fg) !important;
+}
+
+/* ── 9. Connectors window (Odysseus modal, theme colours) ── */
+@media (min-width: 769px) {
+  /* Centre in the chat area like the other tool windows. */
+  #connectors-modal {
+    left: calc(var(--icon-rail-w, 48px) + var(--sidebar-w, 0px));
+    width: calc(100% - (var(--icon-rail-w, 48px) + var(--sidebar-w, 0px)));
+    box-sizing: border-box;
+    transition: left 0.25s ease, width 0.25s ease;
+  }
+}
+
+.connectors-modal-content {
+  width: min(760px, 94vw);
+  height: min(640px, 86vh);
+  padding: 0;
+  overflow: hidden;
+}
+
+.connectors-modal-content .modal-header {
+  gap: 12px;
+  margin: 0;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.connectors-modal-content .modal-header h4 {
+  margin-right: 0;
+}
+
+.connectors-tabs {
+  display: flex;
+  gap: 2px;
+  margin-right: auto;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+
+.connectors-tab {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.connectors-tab:hover {
+  color: var(--fg);
+}
+
+.connectors-tab.active {
+  background: color-mix(in srgb, var(--fg) 14%, var(--panel));
+  color: var(--fg);
+}
+
+.connectors-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+}
+
+.connectors-search,
+.connectors-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.connectors-search:focus,
+.connectors-input:focus {
+  border-color: var(--accent, var(--red));
+}
+
+.connectors-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.connectors-btn:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.connectors-btn.primary {
+  color: var(--accent, var(--red));
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));
+}
+
+.connectors-btn.primary:hover {
+  background: color-mix(in srgb, var(--accent, var(--red)) 12%, transparent);
+}
+
+.connectors-btn.danger {
+  color: var(--red);
+}
+
+.connectors-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.connectors-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 14px 14px;
+}
+
+.connectors-body > .hidden {
+  display: none !important;
+}
+
+.connectors-empty {
+  padding: 28px 8px;
+  color: color-mix(in srgb, var(--fg) 55%, transparent);
+  font-size: 13px;
+  text-align: center;
+}
+
+.connectors-intro {
+  margin: 2px 2px 10px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.connectors-group + .connectors-group {
+  margin-top: 14px;
+}
+
+.connectors-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 4px;
+  color: color-mix(in srgb, var(--fg) 50%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.connectors-group-title span {
+  font-weight: 500;
+}
+
+.connector-row,
+.discover-card {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Odysseus gives modal buttons a fixed 32px height; rows need to grow. */
+.connector-row {
+  height: auto !important;
+  min-height: 52px;
+}
+
+.connector-row:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+.discover-card {
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  margin-bottom: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  cursor: default;
+}
+
+.connector-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.connector-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.connector-icon-letter {
+  background: color-mix(in srgb, var(--fg) 10%, var(--panel));
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.connector-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.connector-name {
+  color: var(--fg);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.connector-desc {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--fg) 58%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discover-card .connector-desc {
+  white-space: normal;
+}
+
+.discover-card .connectors-input {
+  margin-top: 6px;
+}
+
+.connector-tag {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font-size: 10px;
+  font-weight: 500;
+  vertical-align: 1px;
+}
+
+.connector-tools {
+  color: color-mix(in srgb, var(--fg) 50%, transparent);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.connector-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.connector-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--fg) 35%, transparent);
+}
+
+.connector-status.ok i {
+  background: var(--green, #50fa7b);
+}
+
+.connector-status.warn i {
+  background: var(--accent-warm, #d19a66);
+}
+
+.connector-status.err {
+  color: var(--red);
+}
+
+.connector-status.err i {
+  background: var(--red);
+}
+
+.discover-msg,
+.connector-detail-msg {
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font-size: 12px;
+}
+
+.discover-msg:empty {
+  display: none;
+}
+
+.connectors-back {
+  margin: 2px 0 10px;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.connectors-back:hover {
+  color: var(--fg);
+}
+
+.connector-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.connector-detail-head .connector-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.connector-detail-name {
+  margin-bottom: 2px;
+  color: var(--fg);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.connector-detail-desc {
+  margin: 10px 0;
+  color: color-mix(in srgb, var(--fg) 75%, transparent);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.connector-detail-section {
+  margin-top: 16px;
+}
+
+.connector-detail-label {
+  margin-bottom: 6px;
+  color: color-mix(in srgb, var(--fg) 50%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.connector-detail-note {
+  margin: 0;
+  color: color-mix(in srgb, var(--fg) 70%, transparent);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.connector-detail-note code,
+.connectors-intro code,
+.connector-detail-cmd {
+  font-family: 'Fira Code', ui-monospace, monospace;
+  font-size: 11.5px;
+}
+
+.connector-detail-cmd {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  word-break: break-all;
+}
+
+.connector-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.connectors-alert.err {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+.connector-tools-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.connector-tool {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.connector-tool.readonly {
+  cursor: default;
+}
+
+.connector-tool + .connector-tool {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.connector-tool input {
+  margin-top: 2px;
+  accent-color: var(--accent, var(--red));
+}
+
+.connector-tool > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.connector-tool strong {
+  color: var(--fg);
+  font-family: 'Fira Code', ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.connector-tool strong + span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--fg) 58%, transparent);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.connector-tools-list .connectors-empty {
+  padding: 14px;
+}
+
+.connector-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 520px;
+}
+
+.connector-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: color-mix(in srgb, var(--fg) 75%, transparent);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.connector-form small {
+  color: color-mix(in srgb, var(--fg) 50%, transparent);
+  font-weight: 400;
+}
+
+.connector-form textarea {
+  resize: vertical;
+  font-family: 'Fira Code', ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.connector-form #cx-stdio,
+.connector-form #cx-remote {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.connector-form .hidden {
+  display: none !important;
+}
+
+@media (max-width: 640px) {
+  .connector-row {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+  }
+
+  .connector-tools {
+    display: none;
+  }
+}
+
+.discover-note {
+  color: color-mix(in srgb, var(--fg) 50%, transparent);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.connector-detail-note a {
+  color: var(--accent, var(--red));
+}
+
+.connector-signin-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ── 10. Chat transcript (Claude Desktop layout) ──
+   Replies sit on the page with no card; the user's turn is a soft bubble on
+   the right; per-message actions stay out of the way until hovered. */
+#chat-history .msg-ai {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  max-width: 100% !important;
+  padding: 2px 0 !important;
+}
+
+/* The model name stays (useful when switching local models, and group chats
+   need it to show who answered) but as a quiet caption, not a coloured header. */
+#chat-history .msg-ai .role {
+  color: color-mix(in srgb, var(--fg) 45%, transparent) !important;
+  font-size: 12px !important;
+  font-weight: 450 !important;
+}
+
+#chat-history .msg .role::before {
+  display: none !important;
+}
+
+#chat-history .msg .role-timestamp {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+#chat-history .msg:hover .role-timestamp {
+  opacity: 1;
+}
+
+#chat-history .msg-user {
+  position: relative;
+  background: color-mix(in srgb, var(--fg) 7%, var(--bg)) !important;
+  border: none !important;
+  border-radius: 16px !important;
+  max-width: min(75%, 640px) !important;
+  padding: 10px 14px !important;
+  margin-bottom: 34px !important;
+}
+
+/* "You" + time header: the bubble's position already says who wrote it. */
+#chat-history .msg-user .role {
+  display: none !important;
+}
+
+/* Edit / delete / more sit under the bubble and show on hover. */
+#chat-history .msg-user .msg-footer {
+  position: absolute;
+  right: 2px;
+  bottom: -30px;
+  margin: 0 !important;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+#chat-history .msg-user:hover .msg-footer,
+#chat-history .msg-user:focus-within .msg-footer {
+  opacity: 1;
+}
+
+#chat-history .msg-footer .msg-action-btn,
+#chat-history .msg-footer .footer-copy-btn {
+  color: color-mix(in srgb, var(--fg) 50%, transparent) !important;
+}
+
+#chat-history .msg-footer .msg-action-btn:hover,
+#chat-history .msg-footer .footer-copy-btn:hover {
+  color: var(--fg) !important;
+}
+
+/* Thinking toggle: grey "View thinking process" with a small caret. */
+.thinking-header-left span,
+.thinking-toggle {
+  color: color-mix(in srgb, var(--fg) 55%, transparent) !important;
+}
+
+.thinking-toggle::after {
+  font-size: 8px !important;
+}
+
+/* ── 11. Sidebar recents (Claude Desktop layout) ──
+   Titles only: the provider logo and chat-type glyph are hidden; a
+   favourite's bookmark still shows. The model is in each title's tooltip. */
+.session-item .session-star.provider-logo,
+.session-item .session-icon:not(.session-fav) {
+  display: none !important;
+}
+
+/* ── 12. Welcome greeting ── */
+#welcome-screen .welcome-name {
+  background: none !important;
+  -webkit-text-fill-color: currentColor !important;
+  color: var(--fg) !important;
+  font-family: Georgia, 'Times New Roman', serif !important;
+  font-weight: 400 !important;
+  letter-spacing: -0.01em !important;
+}
+
+#welcome-screen .welcome-boat {
+  color: var(--accent-warm, var(--accent, var(--red))) !important;
+}
+
+#welcome-screen .welcome-sub:empty {
+  display: none;
+}
