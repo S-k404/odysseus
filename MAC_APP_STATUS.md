@@ -81,6 +81,20 @@ runner; no real model was touched)
   (`static/js/modelPickReconcile.js`, applied in `loadSessions`). 4 of 4 repeats
   showed it before the fix, 0 of 6 after.
 
+**Feel and everyday use**
+- **Projects page:** sidebar > Projects opens a dialog listing every project with
+  its chat count and last activity, a search box, and one click to open the
+  project's latest chat or start a new one in it (the small + beside it still
+  creates a project). Built from the sidebar's own folder data
+  (`static/js/projectsPage.js`). "Updated … ago" reads the server's UTC times
+  correctly (they carry no zone and were showing 5 h old in India).
+- **Welcome screen:** the tip and the Nobody toggle were drawn at 20-25% opacity,
+  nearly invisible; now 55-60%. Tips show Mac shortcuts (⌘K, ⌘N, ⌘, , ⌘B) on a
+  Mac and Ctrl elsewhere.
+- **Narrow windows:** the Thinking and Context pills no longer wrap onto two
+  lines; below 900 px the Context pill shrinks to its icon.
+- **Mac window:** remembers where you left it (needs the app rebuilt).
+
 **Reasoning loops and runaway thinking (every model)**
 - `_DegenerateStreamGuard` (`src/llm_core.py`) watches every stream for: one token
   repeated, one phrase repeated, a full window of sentences with few different
@@ -232,7 +246,6 @@ hosts, and the model runner guard and unload.
   search, and no TTS/STT.
 - With ChromaDB down, MCP tool choice is by words only, so a vague request
   ("look into that board") gets no MCP tool until it names one.
-- "Projects" opens a new-project prompt rather than a projects page.
 - Ollama models are not unloaded on switch. They unload themselves after 5
   minutes idle, and the 1.5B model is about 1 GB.
 - Branch history: this work is 509 commits behind upstream
@@ -249,7 +262,8 @@ hosts, and the model runner guard and unload.
 2. **Restart and check.** After relaunching, confirm memory and RAG connect, and
    see the startup error screen once by starting the app while the Docker copy
    runs.
-3. **Claude parity polish.** A Projects page. (Light theme is done.)
+3. **Claude parity polish.** Projects page and light theme are done; next candidates are
+   project instructions and files (a project is still only a folder of chats).
 4. **Merge upstream.** Bring in the 509 upstream commits on a separate branch,
    resolve conflicts, and rerun the full suite.
 5. **RAM headroom.** If the Mac still feels tight, package qwen3.6-35b at 64k

@@ -317,8 +317,9 @@ def results(tmp_path_factory):
     sessions_module.write_text(source, encoding="utf-8")
     for name, stub in _STUBS.items():
         (module_dir / name).write_text(stub, encoding="utf-8")
-    # A pure helper sessions.js imports as-is, so it is copied rather than stubbed.
-    shutil.copy(_REPO / "static" / "js" / "modelPickReconcile.js", module_dir / "modelPickReconcile.js")
+    # Pure helpers sessions.js imports as-is, so they are copied rather than stubbed.
+    for helper in ("modelPickReconcile.js", "projectsPage.js"):
+        shutil.copy(_REPO / "static" / "js" / helper, module_dir / helper)
 
     harness = _HARNESS.replace("SESSIONS_PATH", sessions_module.as_uri()).replace(
         "SHELL_PATH", _SHELL_URL

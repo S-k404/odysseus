@@ -1415,8 +1415,18 @@ function initializeEventListeners() {
       sessionModule.promptCreateProject();
     }
   };
+  // Sidebar > Projects opens the Projects page; the small + beside it still makes a new one.
+  const _openProjectsPage = () => {
+    window.odysseusDismissAllModals && window.odysseusDismissAllModals('projects-modal');
+    import('./js/projectsPage.js').then(page => page.openProjectsPage({
+      getProjects: () => sessionModule.getProjectSummaries(),
+      onOpen: (name) => sessionModule.openProject(name),
+      onNewChat: (name) => sessionModule.newChatInProject(name),
+      onNewProject: _handleProjectClick,
+    }));
+  };
   if (navProjectsBtn) {
-    navProjectsBtn.addEventListener('click', _handleProjectClick);
+    navProjectsBtn.addEventListener('click', _openProjectsPage);
   }
   if (claudeNewProjBtn) {
     claudeNewProjBtn.addEventListener('click', _handleProjectClick);

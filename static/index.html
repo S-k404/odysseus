@@ -1144,9 +1144,13 @@
     <script nonce="{{CSP_NONCE}}">
     (function(){
       var mobile = window.matchMedia('(max-width: 768px)').matches;
+      var mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+      var mod = mac ? '\u2318' : 'Ctrl+';
       var desktop = [
-        'Tip: Press Ctrl+K to search across all your conversations.',
-        'Tip: Press Ctrl+B to quickly toggle the sidebar.',
+        'Tip: Press ' + mod + 'K to search across all your conversations.',
+        'Tip: Press ' + mod + 'N to start a new chat.',
+        'Tip: Press ' + mod + ', to open settings.',
+        'Tip: Press ' + mod + 'B to quickly toggle the sidebar.',
         'Tip: Shift-click the sidebar toggle to swap it to the other side.',
         'Tip: Drag and drop files onto the chat to attach them.',
         'Tip: Right-click a session for rename, delete, and memory options.',
