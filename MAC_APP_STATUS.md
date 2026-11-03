@@ -92,6 +92,15 @@ too many models at once.
   127.0.0.1 (`src/native_hosts.py`).
 
 **MCP servers**
+- All 25 built-in servers (24 Python plus the npx browser one, 107 tools) start
+  natively with no Docker. Real calls checked: arXiv search, memory, SQLite.
+- Agents find MCP tools without ChromaDB. The tool index needs ChromaDB, and
+  without it a tool-calling model (any `qwen3`, `gemini`, `gpt`… name) used to be
+  offered no MCP tool at all. `keyword_mcp_tools` (`src/tool_index.py`) now picks
+  up to 8 by words in the request: server names, tool names, and at least two
+  description words. Checked end to end on a `qwen3`-named fake model: "arxiv
+  papers" gets the arXiv tools, "hello" gets none. With ChromaDB up the normal
+  retrieval is still used first.
 - Fixes:
   - Obsidian vault paths.
   - ECE inventory BOM parsing.
@@ -99,6 +108,27 @@ too many models at once.
   - The repo-root lookup in the CAD, PCB, project, music and computer-use
     servers.
 - PCB maker runs real `kicad-cli` DRC/ERC.
+
+**Other agents**
+- **Antigravity (Gemini)** joins Claude Code and Codex in Settings → Integrations
+  → Add → **Antigravity Agent**. It shows install commands that download a skill
+  bundle (`integrations/antigravity/`, served at `/api/antigravity/plugin.zip`)
+  into `~/.gemini/config/skills/`, where Antigravity discovers skills. At runtime
+  it uses the same scope-gated `/api/codex/*` API as the others. Checked: the
+  menu entry, token creation, and the generated commands run end to end against
+  the scratch server in a throwaway `HOME`. Not installed into your real
+  `~/.gemini/config`; run the Settings commands when you want that.
+- Gemini and Gemma models used as Odysseus's own agent take the same tool-calling
+  path as qwen3, so they get the MCP fix above.
+
+**Optional packages (Cookbook → Dependencies)**
+- Installed into `.venv`: `playwright`, `hf_transfer`, `rembg`, and the `sam_mask`
+  set (`torch` 2.15 with MPS, `transformers` 5.22, `accelerate`, `torchvision`).
+  No existing package changed; `pip check` is clean; `onnxruntime` and
+  `fastembed` still work. `playwright` browsers are not downloaded.
+- Not installable here: `realesrgan` (its `basicsr` dependency won't build on
+  Python 3.14; Docker patches it in `docker/build-realesrgan-wheels.sh`) and
+  `APFEL` (not a pip package).
 
 **Tests:** the full suite passes. New tests cover the instance lock, native
 hosts, and the model runner guard and unload.
@@ -117,6 +147,8 @@ hosts, and the model runner guard and unload.
 - ChromaDB, SearXNG and Speaches only run inside the Docker stack. While Docker
   is off, the Mac app has no vector memory or document search, no SearXNG web
   search, and no TTS/STT.
+- With ChromaDB down, MCP tool choice is by words only, so a vague request
+  ("look into that board") gets no MCP tool until it names one.
 - "Projects" opens a new-project prompt rather than a projects page.
 - Ollama models are not unloaded on switch. They unload themselves after 5
   minutes idle, and the 1.5B model is about 1 GB.
