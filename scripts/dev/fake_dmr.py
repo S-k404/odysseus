@@ -8,7 +8,8 @@ Behaves like DMR where Odysseus cares: a chat request "loads" its model,
 Starts with two models resident. Every request is appended to LOGFILE as JSON,
 chat requests with the (truncated) messages the model was sent. A message
 containing SLOWTEST makes the reply stream slowly; TOOLTEST makes a
-tool-calling request answer with one update_plan tool call first.
+tool-calling request answer with one update_plan tool call first; LOOPTEST makes
+the reasoning loop forever unless thinking is switched off in the request.
 
 Real DMR quirks it reproduces:
   - replies name the model by its file path (…/model.gguf), not its tag;
@@ -98,7 +99,9 @@ class H(BaseHTTPRequestHandler):
             msgs = body.get("messages") or []
             log({"method": "POST", "path": p, "model": model, "stream": body.get("stream"),
                  "messages": [[m.get("role"), _clip(m.get("content"))] for m in msgs],
-                 "n_tools": len(body.get("tools") or [])})
+                 "n_tools": len(body.get("tools") or []),
+                 "chat_template_kwargs": body.get("chat_template_kwargs"),
+                 "macos_rules": any("## Shell environment" in str(m.get("content")) for m in msgs if m.get("role") == "system")})
             # A message containing SLOWTEST streams slowly, to switch models mid-reply.
             slow = any("SLOWTEST" in str(m.get("content")) for m in msgs)
             # A message containing TOOLTEST makes a tool-calling request answer with one
@@ -107,6 +110,27 @@ class H(BaseHTTPRequestHandler):
             can_plan = any((t.get("function") or {}).get("name") == "update_plan" for t in body.get("tools") or [])
             wants_tool = (can_plan and msgs and "TOOLTEST" in str(msgs[-1].get("content"))
                           and not any(m.get("role") == "tool" for m in msgs))
+            # LOOPTEST: the reasoning cycles through a few sentences and never answers,
+            # unless the request turns thinking off (chat_template_kwargs.enable_thinking=false).
+            no_think = (body.get("chat_template_kwargs") or {}).get("enable_thinking") is False
+            if body.get("stream") and msgs and "LOOPTEST" in str(msgs[-1].get("content")) and not no_think:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                cycle = ["I'll write the response.", "I'll use the list.", "I'll group them.", "I'll be concise."]
+                sent = 0
+                try:
+                    for sent in range(1, 601):
+                        chunk = {"id": "x", "object": "chat.completion.chunk", "model": model,
+                                 "choices": [{"index": 0, "delta": {"reasoning_content": cycle[sent % 4] + "\n\n"}, "finish_reason": None}]}
+                        self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                        self.wfile.flush()
+                        time.sleep(0.01)
+                except (BrokenPipeError, ConnectionResetError):
+                    log({"method": "POST", "path": p, "model": model, "event": "loop_client_closed", "after_sentences": sent})
+                    return
+                log({"method": "POST", "path": p, "model": model, "event": "loop_ran_to_the_end"})
+                return
             if body.get("stream") and wants_tool:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")

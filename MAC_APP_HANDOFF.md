@@ -113,7 +113,8 @@ scripts/dev/scratch_server.sh stop
   `node scripts/dev/model_switch_check.js OUT_DIR [1-5]` and
   `python3 scripts/dev/model_switch_log.py`. It shows the exact messages each
   model was sent. The fake runner understands `SLOWTEST` (slow stream, to switch
-  mid-reply) and `TOOLTEST` (one `update_plan` tool call) in a message.
+  mid-reply) and `TOOLTEST` (one `update_plan` tool call) or `LOOPTEST` (reasoning loops until the
+  request turns thinking off) in a message.
 - The model picker is loaded as two module instances (`modelPicker.js` with and
   without a `?v=` suffix), so state shared between them lives on `window`
   (`__odysseusLastPickedRoute`, `__odysseusModelSwitchPromise`). `loadSessions()`
