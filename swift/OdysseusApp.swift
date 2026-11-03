@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     var statusLabel: NSTextField!
     var spinner: NSProgressIndicator!
     var serverProcess: Process?
+    var menuBar: MenuBarStats?
     var childWindows: [NSWindow] = []
     var downloadWindows: [ObjectIdentifier: NSWindow] = [:]
     
@@ -43,6 +44,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
         setupMenuBar()
         setupWindow()
+        menuBar = MenuBarStats(
+            port: port,
+            repoDir: repoDir,
+            onOpen: { [weak self] in self?.showMainWindow() },
+            onQuit: { NSApp.terminate(nil) }
+        )
+        if let debugPath = ProcessInfo.processInfo.environment["ODYSSEUS_MENUBAR_DEBUG_FILE"] {
+            menuBar?.writeDebug(to: debugPath)
+        }
         checkOrStartServer()
     }
 
@@ -556,10 +566,3 @@ extension AppDelegate: WKDownloadDelegate {
         alert.runModal()
     }
 }
-
-// Main Entry Point
-let app = OdysseusApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
-

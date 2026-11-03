@@ -58,7 +58,8 @@ scripts/dev/scratch_server.sh stop
 
 - Rebuild the app: `./build-macos-app.sh` (installs `/Applications/Odysseus.app`
   and builds `dist/Odysseus.dmg`). Swift is in `swift/OdysseusApp.swift`;
-  type-check with `xcrun swiftc -typecheck`.
+  type-check with `xcrun swiftc -typecheck swift/OdysseusApp.swift swift/MenuBarStats.swift swift/main.swift`
+  (three files: the entry point lives in `main.swift`).
 - The app starts uvicorn on 7860 and stops it on quit. Log:
   `logs/odysseus-app.log`. Static files are served from the repo, so JS/CSS
   changes need only a reload; Python changes need ⌘Q and reopen.
@@ -102,6 +103,14 @@ scripts/dev/scratch_server.sh stop
   (`docker model package --from … --context-size N`), not `_configure`.
 
 ## Gotchas
+
+- Menu bar item without a screen grab: `Odysseus --dump-menubar` prints its title
+  and menu rows from live data, `--menubar-unload-all` does the menu's unload, and
+  launching the app with `ODYSSEUS_MENUBAR_DEBUG_FILE=/path` writes whether the
+  item is on screen and its menu. To try a build without touching real data, run a
+  copy with `ODYSSEUS_PORT=7899 ODYSSEUS_DATA_DIR=/tmp/x AUTH_ENABLED=false`.
+- Memory knobs: `ODYSSEUS_RAM_GUARD=0` (allow any load), `ODYSSEUS_MEMORY_GUARD=0`
+  (no watchdog). Loop knobs live at the top of the guard in `src/llm_core.py`.
 
 - "The Odysseus server stopped during startup" with an unhelpful log: look for
   `DataDirInUse` in `logs/odysseus-app.log` and check `data/.server-instance.json`

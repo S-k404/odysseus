@@ -81,6 +81,41 @@ runner; no real model was touched)
   (`static/js/modelPickReconcile.js`, applied in `loadSessions`). 4 of 4 repeats
   showed it before the fix, 0 of 6 after.
 
+**Reasoning loops and runaway thinking (every model)**
+- `_DegenerateStreamGuard` (`src/llm_core.py`) watches every stream for: one token
+  repeated, one phrase repeated, a full window of sentences with few different
+  ones, text that compresses like a loop (0.14 for thinking, 0.10 for answers;
+  ordinary code and docs never went below 0.171 over 4,157 windows), and thinking
+  past its ceiling (the Thinking pill's budget x1.5 on self-hosted servers, else
+  24,000 tokens; it used to be only a label there).
+- A trip during thinking, before an answer starts, closes the request and retries
+  once with thinking off (`chat_template_kwargs.enable_thinking=false`, Ollama
+  `think:false`, gpt-oss low effort, plus `presence_penalty` 1.0 and a short
+  "answer directly" note). Covers OpenAI-compatible servers (Docker runner,
+  llama.cpp, LM Studio, vLLM) and Ollama native; Anthropic streams stop with an
+  error. A second loop, or a loop after the answer started, ends with a clear error.
+- Checked on qwen3-8b through the real runner: thinking-off is honoured, the old
+  flags were not, a forced trip retried and answered, and 3,000 tokens of honest
+  reasoning was left alone. Not seen: a spontaneous Qwen3.6 loop.
+
+**Keeping the Mac alive** (`src/memory_guard.py`, `src/docker_model_runner.py`)
+- Before a model loads, its weights (+15% + 1 GB) must fit in what is free plus
+  what unloading the other models returns, less a reserve (the larger of 3 GB and
+  6% of RAM). Memory is counted like Activity Monitor (app + wired + compressed).
+  A load that would push the Mac into swap is refused with the numbers and a
+  way to override (`ODYSSEUS_RAM_GUARD=0`).
+- A watchdog unloads every chat model when macOS reports critical memory pressure
+  on two checks in a row (10 s), and writes `logs/memory-guard.json`.
+  `ODYSSEUS_MEMORY_GUARD=0` turns it off.
+
+**Menu bar item** (`swift/MenuBarStats.swift`)
+- A status item next to the clock: icon plus the loaded weights ("14G", or a
+  warning sign under memory pressure). Its menu shows server status, each loaded
+  model with size and context, memory in use, available, swap, pressure, CPU
+  load, any emergency unload, and actions: Unload all models, Open Odysseus,
+  Show server log, Quit. It reads the runner and the kernel directly, refreshes
+  every 5 s, and needs no login. Needs the app rebuilt (`./build-macos-app.sh`).
+
 **Local model safety** (Docker Model Runner on 127.0.0.1:12434)
 - Odysseus generates with one local model at a time. Before a model loads,
   the others are unloaded (`src/docker_model_runner.py`, `_local_model_slot`
