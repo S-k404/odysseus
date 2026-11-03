@@ -36,6 +36,12 @@ too many models at once.
 - The chat model picker hides speech, embedding and image models (Kokoro,
   Whisper, nomic-embed, stable-diffusion). They stay available in the voice,
   memory and image settings.
+- Light mode: a built-in **claude-light** theme (Settings → Appearance) with
+  Claude Desktop's cream page, darker sidebar, white composer and terracotta
+  accent. Checked in headless Chrome against the scratch server: welcome, chat
+  and picker. The older `light` and `paper` themes also work with the skin.
+  Known: the welcome tip and "Nobody" label are very faint in every theme
+  (opacity .2 / .25, from upstream).
 - The picker no longer lists the untagged `sha256:…` copies that
   `docker model package` leaves behind. One is hidden only when a tagged model in
   the list has the same weights (`hide_untagged_duplicates` in
@@ -104,8 +110,8 @@ hosts, and the model runner guard and unload.
    image doesn't have the unload, guard or single-server changes until it is
    rebuilt.
 3. **Optional theme:** your saved theme is a custom blue/red palette with the
-   rain effect. Settings → Appearance → **Claude** gives the Claude Desktop
-   colours and no background effect.
+   rain effect. Settings → Appearance → **claude** (dark) or **claude-light**
+   gives the Claude Desktop colours and no background effect.
 
 ### Known gaps
 - ChromaDB, SearXNG and Speaches only run inside the Docker stack. While Docker
@@ -128,7 +134,7 @@ hosts, and the model runner guard and unload.
 2. **Restart and check.** After relaunching, confirm memory and RAG connect, and
    see the startup error screen once by starting the app while the Docker copy
    runs.
-3. **Claude parity polish.** A Projects page, and check the light theme.
+3. **Claude parity polish.** A Projects page. (Light theme is done.)
 4. **Merge upstream.** Bring in the 509 upstream commits on a separate branch,
    resolve conflicts, and rerun the full suite.
 5. **RAM headroom.** If the Mac still feels tight, package qwen3.6-35b at 64k
