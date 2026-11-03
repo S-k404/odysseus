@@ -211,12 +211,18 @@ runner; no real model was touched)
 hosts, and the model runner guard and unload.
 
 ### Needs a step from you
-1. **Quit and reopen Odysseus** (⌘Q). The server that is running now is the old
-   code; the new app build is already in `/Applications`.
+1. ~~Quit and reopen Odysseus.~~ Done 2026-11-03 20:24: the rebuilt app (menu bar
+   item, log append fix, relaunch wait) is installed and running. The previous
+   build is kept in `dist/Odysseus.app.previous`; delete it when you are happy.
 2. **Before the next Docker run:** `docker compose up -d --build`. The Docker
-   image doesn't have the unload, guard or single-server changes until it is
-   rebuilt.
-3. **Optional theme:** your saved theme is a custom blue/red palette with the
+   image doesn't have the unload, guard, loop-protection or single-server
+   changes until it is rebuilt.
+3. **Try Qwen3.6 for real.** Loop recovery and thinking-off are checked on
+   qwen3-8b only. Qwen3.6-35b needs about 18 GB free; the RAM guard refuses it
+   until you free memory (27 of 48 GB were in use by other apps).
+4. **Look at the menu bar icon** and say if anything is off. It was checked from
+   a test copy by its position and menu, not by eye.
+5. **Optional theme:** your saved theme is a custom blue/red palette with the
    rain effect. Settings → Appearance → **claude** (dark) or **claude-light**
    gives the Claude Desktop colours and no background effect.
 
