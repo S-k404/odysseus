@@ -4,7 +4,7 @@
 import { providerLogo } from './providers.js';
 import uiModule from './ui.js';
 import settingsModule from './settings.js';
-import { isNonChatModelId, sortModelObjects } from './modelSort.js';
+import { isImageModelId, isNonChatModelId, sortModelObjects } from './modelSort.js';
 import spinnerModule from './spinner.js';
 import { releaseLocalModels } from './localModels.js';
 
@@ -375,7 +375,8 @@ function _initModelPickerDropdown() {
     } catch (_) { /* leave stale data; picker still works */ }
   }
 
-  function _getAllModels() {
+  // Chat models (what the picker lists) or image models (own section), depending on `keep`.
+  function _collectModels(keep) {
     const items = (window.modelsModule && window.modelsModule.getCachedItems) ? window.modelsModule.getCachedItems() : [];
     const result = [];
     const seen = new Set();
@@ -395,8 +396,7 @@ function _initModelPickerDropdown() {
       const isLocalDead = !!(probeResult && probeResult.alive === false);
       const isApiEndpoint = item.category && item.category !== 'local';
       allModels.forEach((mid, i) => {
-        // Voice, embedding and image models live in their own settings, not here.
-        if (isNonChatModelId(mid)) return;
+        if (!keep(mid)) return;
         // Local/self-hosted servers often expose the same model through several
         // stale endpoints, so keep deduping those by model id. Cloud/API
         // endpoints are user-selected provider routes; the same model id can be
@@ -431,6 +431,10 @@ function _initModelPickerDropdown() {
     });
     return sortModelObjects(result);
   }
+
+  // Voice and embedding models live in their own settings; image models get their own section.
+  function _getAllModels() { return _collectModels(mid => !isNonChatModelId(mid) && !isImageModelId(mid)); }
+  function _getImageModels() { return _collectModels(isImageModelId); }
 
   function _hasModelCache() {
     try {
@@ -533,6 +537,47 @@ function _initModelPickerDropdown() {
   let _justExpandedProvider = null;
 
   function _populate(filter) {
+    _populateChatModels(filter);
+    _appendImageModels(filter);
+  }
+
+  // "Image generation" section: picking one makes the chat generate images (the server
+  // routes by model id) and puts the composer in image mode (see updateModelPicker).
+  function _appendImageModels(filter) {
+    const q = (filter || '').trim().toLowerCase();
+    const images = _getImageModels().filter(m => !q || [m.mid, m.display, m.epName, m.providerText]
+      .filter(Boolean).join(' ').toLowerCase().includes(q));
+    if (!images.length) return;
+    // A catalogue of only image models would otherwise stay collapsed as "No models connected".
+    listEl.classList.remove('is-empty');
+    menu.classList.remove('no-models');
+    const label = document.createElement('div');
+    label.className = 'mp-section-label';
+    label.textContent = 'Image generation';
+    listEl.appendChild(label);
+    images.forEach(m => {
+      const row = document.createElement('div');
+      row.className = 'model-switch-item mp-image-model';
+      if (m.stale) {
+        row.classList.add('model-switch-stale');
+        row.style.opacity = '0.45';
+        row.title = `Local server appears offline: ${m.staleReason}. Click to try anyway.`;
+      }
+      const name = document.createElement('span');
+      name.className = 'mp-model-name';
+      name.textContent = m.display;
+      name.title = m.mid;
+      row.appendChild(name);
+      const ep = document.createElement('span');
+      ep.className = 'model-switch-ep';
+      ep.textContent = m.epName || '';
+      row.appendChild(ep);
+      row.addEventListener('click', () => _pick(m));
+      listEl.appendChild(row);
+    });
+  }
+
+  function _populateChatModels(filter) {
     listEl.innerHTML = '';
     listEl.classList.remove('is-loading');
     const all = _getAllModels();
@@ -1166,6 +1211,22 @@ async function _pick(m) {
  * Always visible — shows current model name or "Select model" if none.
  * Called after selectSession, createDirectChat, and model switch.
  */
+// Image models answer with a picture, so the Agent|Chat toggle and the Thinking and Context
+// pills mean nothing for them: claude-skin.css hides those under body.image-model-active.
+const _CHAT_PLACEHOLDER_KEY = 'chatPlaceholder';
+function _applyImageMode(on) {
+  document.body.classList.toggle('image-model-active', !!on);
+  const box = document.getElementById('message');
+  if (!box) return;
+  if (on) {
+    if (box.dataset[_CHAT_PLACEHOLDER_KEY] === undefined) box.dataset[_CHAT_PLACEHOLDER_KEY] = box.placeholder;
+    box.placeholder = 'Describe the image to create, or attach one to edit…';
+  } else if (box.dataset[_CHAT_PLACEHOLDER_KEY] !== undefined) {
+    box.placeholder = box.dataset[_CHAT_PLACEHOLDER_KEY];
+    delete box.dataset[_CHAT_PLACEHOLDER_KEY];
+  }
+}
+
 export function updateModelPicker() {
   if (!_deps) return;
   const label = document.getElementById('model-picker-label');
@@ -1258,6 +1319,8 @@ export function updateModelPicker() {
   ) {
     _ensureDefaultPendingChat();
   }
+
+  _applyImageMode(isImageModelId(modelId));
 
   const displayName = modelId ? modelId.split('/').pop() : 'Select model';
   // The header indicator clips long names with ellipsis; show the full model

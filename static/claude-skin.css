@@ -1908,3 +1908,13 @@ body.sidebar-collapsed .claude-chat-top-bar {
   .ody-composer-pill.context-pill #context-mode-label { display: none; }
   .ody-composer-pill.context-pill { padding: 4px 8px !important; }
 }
+
+/* ── 16. Image generation ──
+   A chat on an image model (Stable Diffusion, gpt-image, flux...) answers with a
+   picture, so the Agent|Chat toggle and the Thinking and Context pills have nothing
+   to control. modelPicker.js sets body.image-model-active from the active model and
+   swaps the placeholder. */
+body.image-model-active #composer-mode-toggle,
+body.image-model-active #thinking-effort-pill,
+body.image-model-active #context-mode-pill,
+body.image-model-active #chat-context-pill { display: none !important; }
