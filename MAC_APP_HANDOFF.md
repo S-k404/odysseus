@@ -32,6 +32,13 @@ NODE_PATH=<dir with puppeteer-core>/node_modules \
 scripts/dev/scratch_server.sh stop
 ```
 
+- `ai/qwen3-test:8B` in the fake runner is there on purpose: "qwen3" makes
+  Odysseus treat it as a native tool-calling model. Pick it in Agent mode to see
+  which MCP tools a real qwen3 turn would be offered (`[agent-debug]` and
+  `[tool-rag]` lines in the scratch server log). The `*-chat` models take the
+  other, keyword path.
+- To drive Settings headlessly: the gear is `#user-bar-settings` and the
+  Integrations Add button is `#unified-intg-add-btn`.
 - `scripts/dev/fake_dmr.py` imitates Docker Model Runner: loaded-model state,
   `/engines/unload`, `/engines/status` (vLLM-Metal), a file-path model name in
   replies and a `<think>` block. Its request log (`dmr.jsonl`) shows exactly
@@ -70,6 +77,8 @@ scripts/dev/scratch_server.sh stop
 | One server per `data/` | `src/instance_lock.py` (claim file `data/.server-instance.json`; off with `ODYSSEUS_SINGLE_INSTANCE=0`) |
 | Docker hostnames when native | `src/native_hosts.py` (rewrites `speaches`, `searxng`, `chromadb`, `ntfy` URLs to the ports Docker publishes) |
 | Connectors window | `static/js/connectors.js`, `routes/mcp_routes.py` |
+| Which MCP tools an agent is offered | `src/agent_loop.py` (`[tool-rag]` block), `src/tool_index.py` (`ToolIndex`, and `keyword_mcp_tools` when ChromaDB is down) |
+| Other agents (Claude Code, Codex, Antigravity) | `integrations/<agent>/`, `routes/codex_routes.py` (zip routes), `AGENT_CONFIGS` in `static/js/settings.js`. All use the `/api/codex/*` scoped API; add a new agent by copying `integrations/antigravity/` |
 | Mac wrapper | `swift/OdysseusApp.swift`, `build-macos-app.sh` |
 
 ## Safety rules the code enforces (keep them)
