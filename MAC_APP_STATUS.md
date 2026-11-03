@@ -56,6 +56,31 @@ too many models at once.
 - If the server stops during startup, the splash screen shows why. This was
   type-checked only; it hasn't been seen on screen yet.
 
+**Switching models and handoff** (checked on the scratch server with the fake
+runner; no real model was touched)
+- Switching between turns in a chat: the new model gets the whole conversation
+  (earlier user messages, the other model's replies with the thinking block
+  removed, and the new question), the old model is unloaded before the new one
+  loads, each reply keeps the caption of the model that wrote it, and the chat
+  remembers its model across a reload.
+- Switching while a reply is streaming: the reply finishes on the old model and
+  keeps its caption, the unload waits until it is done, and the next message goes
+  to the new model.
+- Switching to a model the RAM guard refuses: the chat shows why, nothing loads,
+  and switching back works. The refused message is not lost; it is sent along with
+  the next one.
+- Project chats: same results, including after closing and reopening the chat from
+  the sidebar. A project is only a folder label; it adds no instructions or files
+  to the conversation.
+- A turn that used tools (native tool calls on a qwen3-style model) can be handed
+  to a model on the other tool path and back. Only the text carries over, as it
+  does within one model; the tool call itself is not replayed to the next model.
+- Fixed: the picker label could show the old model after a switch while the chat
+  really used the new one. A sessions refresh sent at the same moment as the
+  model-save request could answer first and overwrite the pick
+  (`static/js/modelPickReconcile.js`, applied in `loadSessions`). 4 of 4 repeats
+  showed it before the fix, 0 of 6 after.
+
 **Local model safety** (Docker Model Runner on 127.0.0.1:12434)
 - Odysseus generates with one local model at a time. Before a model loads,
   the others are unloaded (`src/docker_model_runner.py`, `_local_model_slot`

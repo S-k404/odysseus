@@ -5,7 +5,10 @@
 Behaves like DMR where Odysseus cares: a chat request "loads" its model,
 /engines/unload removes models, /engines/ps lists what is loaded, and
 /engines/status reports vLLM-Metal so the RAM guard has something to refuse.
-Starts with two models resident. Every request is appended to LOGFILE as JSON.
+Starts with two models resident. Every request is appended to LOGFILE as JSON,
+chat requests with the (truncated) messages the model was sent. A message
+containing SLOWTEST makes the reply stream slowly; TOOLTEST makes a
+tool-calling request answer with one update_plan tool call first.
 
 Real DMR quirks it reproduces:
   - replies name the model by its file path (…/model.gguf), not its tag;
@@ -32,6 +35,14 @@ MODELS = {
     "huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF:Q4_K_M": "gguf",
 }
 loaded = {"ai/big-chat:2", "ai/small-chat:1"}  # two models resident at start
+
+
+def _clip(content, n=110):
+    """Start and end of a message, so a long preamble doesn't hide the question."""
+    text = str(content)
+    if "UNTRUSTED SOURCE DATA" in text:  # retrieved reference context: keep it readable
+        return text[:2500]
+    return text if len(text) <= 2 * n else text[:n] + " ... " + text[-n:]
 
 
 def log(entry):
@@ -84,12 +95,38 @@ class H(BaseHTTPRequestHandler):
         if p.endswith("/chat/completions"):
             model = body.get("model")
             loaded.add(model)
-            log({"method": "POST", "path": p, "model": model, "stream": body.get("stream")})
+            msgs = body.get("messages") or []
+            log({"method": "POST", "path": p, "model": model, "stream": body.get("stream"),
+                 "messages": [[m.get("role"), _clip(m.get("content"))] for m in msgs],
+                 "n_tools": len(body.get("tools") or [])})
+            # A message containing SLOWTEST streams slowly, to switch models mid-reply.
+            slow = any("SLOWTEST" in str(m.get("content")) for m in msgs)
+            # A message containing TOOLTEST makes a tool-calling request answer with one
+            # update_plan call (harmless: no effect without an active plan), then reply
+            # normally once the tool result is in the history.
+            can_plan = any((t.get("function") or {}).get("name") == "update_plan" for t in body.get("tools") or [])
+            wants_tool = (can_plan and msgs and "TOOLTEST" in str(msgs[-1].get("content"))
+                          and not any(m.get("role") == "tool" for m in msgs))
+            if body.get("stream") and wants_tool:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                call = {"index": 0, "id": "call_plan_1", "type": "function",
+                        "function": {"name": "update_plan", "arguments": json.dumps({"plan": "- [x] fake step"})}}
+                for delta, reason in (({"tool_calls": [call]}, None), ({}, "tool_calls")):
+                    chunk = {"id": "x", "object": "chat.completion.chunk", "model": model,
+                             "choices": [{"index": 0, "delta": delta, "finish_reason": reason}]}
+                    self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n")
+                log({"method": "POST", "path": p, "model": model, "event": "tool_call_sent"})
+                return
             if body.get("stream"):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
                 for piece in ["<think>Let me think.</think>", "Hello", " from ", model]:
+                    if slow:
+                        time.sleep(0.8)
                     chunk = {"id": "x", "object": "chat.completion.chunk", "model": "/Users/x/.docker/models/bundles/sha256/abc123/model/model.gguf",
                              "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]}
                     self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
@@ -97,6 +134,7 @@ class H(BaseHTTPRequestHandler):
                 done = {"id": "x", "object": "chat.completion.chunk", "model": model,
                         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
                 self.wfile.write(f"data: {json.dumps(done)}\n\ndata: [DONE]\n\n".encode())
+                log({"method": "POST", "path": p, "model": model, "event": "stream_done"})
                 return
             return self._json({"id": "x", "object": "chat.completion", "model": model,
                                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Short title"},

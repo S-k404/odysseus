@@ -103,6 +103,21 @@ scripts/dev/scratch_server.sh stop
 
 ## Gotchas
 
+- Model switching has a repeatable check: start the scratch server, then
+  `node scripts/dev/model_switch_check.js OUT_DIR [1-5]` and
+  `python3 scripts/dev/model_switch_log.py`. It shows the exact messages each
+  model was sent. The fake runner understands `SLOWTEST` (slow stream, to switch
+  mid-reply) and `TOOLTEST` (one `update_plan` tool call) in a message.
+- The model picker is loaded as two module instances (`modelPicker.js` with and
+  without a `?v=` suffix), so state shared between them lives on `window`
+  (`__odysseusLastPickedRoute`, `__odysseusModelSwitchPromise`). `loadSessions()`
+  replaces the whole session list; anything that must survive a refresh needs a
+  reconcile step like `modelPickReconcile.js`.
+- A message containing words like "project", "app", "file", "system" or "change"
+  turns a Chat-mode message into an agent turn (`workspaceAgentIntent` in
+  `static/js/chat.js`). A test prompt that happens to include one behaves
+  differently from the same chat without it.
+
 - Docker Model Runner names the answering model by file path
   (`…/bundles/sha256/…/model.gguf`). `isRunnerAlias` hides that; don't compare
   raw model names in the UI.
