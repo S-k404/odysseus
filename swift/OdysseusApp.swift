@@ -187,11 +187,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         // and then blocks the server on its next log write.
         let logPath = "\(repoDir)/logs/odysseus-app.log"
         try? FileManager.default.createDirectory(atPath: "\(repoDir)/logs", withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: logPath) {
-            FileManager.default.createFile(atPath: logPath, contents: nil)
-        }
-        if let log = FileHandle(forWritingAtPath: logPath) {
-            log.seekToEndOfFile()
+        // O_APPEND, not seek-to-end: when the app is quit and reopened, the old
+        // server is still shutting down and writing to this file. With separate
+        // offsets the two servers overwrote each other's lines, which hid the
+        // new server's error from the startup screen.
+        let logFD = open(logPath, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+        if logFD >= 0 {
+            let log = FileHandle(fileDescriptor: logFD, closeOnDealloc: true)
             proc.standardOutput = log
             proc.standardError = log
         } else {

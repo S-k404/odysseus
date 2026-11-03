@@ -112,6 +112,18 @@ runner; no real model was touched)
 - Only one server can use `data/` at a time (`src/instance_lock.py`). A
   second one refuses to start and names the server that holds the folder.
   Verified with two servers. Turn off with `ODYSSEUS_SINGLE_INSTANCE=0`.
+- Quitting and reopening the Mac app right away used to fail with "The Odysseus
+  server stopped during startup": the old server takes about 5 s to close its MCP
+  servers and still held the folder, so the new one refused to start. A server
+  that is shutting down now marks its claim "stopping", and a new one waits up to
+  30 s for it (`InstanceLock.mark_stopping`). A server that is not stopping, such
+  as the Docker copy, is still refused at once. Reproduced on a scratch folder
+  before the fix, and checked after it with a 6 s shutdown: the new server waited
+  about 8 s, then started.
+- The app now writes the server log in append mode. Before, the old and new
+  server wrote at their own offsets and overwrote each other, which scrambled the
+  log and hid the real error from the startup screen. This part needs the app
+  rebuilt (`./build-macos-app.sh`); the waiting needs no rebuild.
 - `.env` is shared with Docker. When running natively, Docker service URLs
   such as `http://speaches:8000` are pointed at the ports Docker publishes on
   127.0.0.1 (`src/native_hosts.py`).

@@ -9,7 +9,9 @@ another process refuses to start and says which server holds the folder.
 
 A claim goes stale when its heartbeat stops (crash, ``kill -9``, container
 removed) or when its process is gone on this machine, so a restart is never
-blocked for long. Set ``ODYSSEUS_SINGLE_INSTANCE=0`` to turn the check off.
+blocked for long. A server that is shutting down marks its claim "stopping", and
+a new server waits up to 30 s for it to clear instead of refusing, so quitting
+and reopening the Mac app works even while the old server closes its MCP servers. Set ``ODYSSEUS_SINGLE_INSTANCE=0`` to turn the check off.
 """
 
 import asyncio
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 LOCK_NAME = ".server-instance.json"
 HEARTBEAT_SECONDS = 10.0
 STALE_AFTER_SECONDS = 35.0
+STOPPING_WAIT_SECONDS = 30.0
 
 
 class DataDirInUse(RuntimeError):
@@ -100,15 +103,36 @@ class InstanceLock:
     def _write(self) -> None:
         atomic_write_json(self.path, {**self.claim, "heartbeat": time.time()}, indent=2)
 
-    def acquire(self) -> None:
-        current = self._read()
-        if self._is_live_other(current):
-            raise DataDirInUse(
-                f"{os.path.dirname(self.path)} is already in use by another Odysseus "
-                f"{describe(current)}. Stop that server first (for the Docker copy: "
-                "`docker compose stop odysseus`), or point this one at a different "
-                "folder with ODYSSEUS_DATA_DIR."
-            )
+    def mark_stopping(self) -> None:
+        """Shutdown has begun: a server starting now waits for this claim to clear
+        instead of refusing, since closing the MCP servers takes several seconds."""
+        self.claim["stopping"] = True
+        try:
+            self._write()
+        except Exception as e:
+            logger.debug("could not mark instance claim as stopping: %s", e)
+
+    def acquire(self, wait_seconds: float = STOPPING_WAIT_SECONDS) -> None:
+        deadline = time.monotonic() + wait_seconds
+        announced = False
+        while True:
+            current = self._read()
+            if not self._is_live_other(current):
+                break
+            # Quitting and reopening the Mac app starts the new server while the old
+            # one is still shutting down; only a holder that is not stopping, or one
+            # that never lets go, is a real conflict.
+            if not current.get("stopping") or time.monotonic() >= deadline:
+                raise DataDirInUse(
+                    f"{os.path.dirname(self.path)} is already in use by another Odysseus "
+                    f"{describe(current)}. Stop that server first (for the Docker copy: "
+                    "`docker compose stop odysseus`), or point this one at a different "
+                    "folder with ODYSSEUS_DATA_DIR."
+                )
+            if not announced:
+                logger.info("Waiting for the previous Odysseus %s to finish shutting down...", describe(current))
+                announced = True
+            time.sleep(0.5)
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self._write()
 

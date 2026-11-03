@@ -103,6 +103,12 @@ scripts/dev/scratch_server.sh stop
 
 ## Gotchas
 
+- "The Odysseus server stopped during startup" with an unhelpful log: look for
+  `DataDirInUse` in `logs/odysseus-app.log` and check `data/.server-instance.json`
+  (the claim; `"stopping": true` means a server is mid-shutdown). To reproduce a
+  quit-and-reopen race without touching real data, run two servers on a scratch
+  `ODYSSEUS_DATA_DIR` and SIGTERM the first while its shutdown is slow.
+
 - Model switching has a repeatable check: start the scratch server, then
   `node scripts/dev/model_switch_check.js OUT_DIR [1-5]` and
   `python3 scripts/dev/model_switch_log.py`. It shows the exact messages each

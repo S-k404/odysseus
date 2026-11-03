@@ -1290,6 +1290,9 @@ async def _startup_event():
 
 async def _shutdown_event():
     logger.info("Application shutting down...")
+    # Tell a server that starts meanwhile (quit + reopen) to wait, not refuse.
+    if instance_lock:
+        instance_lock.mark_stopping()
     if upload_cleanup_task:
         upload_cleanup_task.cancel()
         try:
