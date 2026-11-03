@@ -557,6 +557,14 @@ _DOMAIN_RULES = {
     "gdrive": """\
 ## Google Drive rules
 - Use Google Drive tools to search cloud documents, spreadsheets, presentations, and inspect file metadata.""",
+    "reverse_engineering": """\
+## Reverse-engineering (REA) rules
+- Use the REA tools (`mcp__rea__*`) to inspect binaries, archives, .NET/Unity assemblies, IL2CPP metadata and NW.js/RPG Maker apps.
+- `/games`, `/saves` and `/workspace` exist only inside the REA container. `bash`, `ls` and `read_file` cannot see them, so never look for these paths on the host: pass them to an REA tool.
+- Pick the tool by target. An `.exe` or `.dll`: `inspect_pe_imports`, `inspect_native_exports`, `inspect_pe_resources`. To name a game's engine, inspect its main `.exe`: an `nw_elf.dll` import means NW.js, `UnityPlayer.dll` means Unity. Unity: `inspect_managed_artifact` (Mono) or `inspect_il2cpp_metadata` (`global-metadata.dat`).
+- `analyze_javascript_application` takes a JS app folder as `input_path`, runs for about a minute, and returns statistics, not engine names or file lists. No REA tool lists a folder: if you need a file name you do not have, ask the user for the path.
+- `inspect_artifact` and `extract_artifact` take no path: call `open_binary` on a file first (it refuses folders).
+- Leave `detail` at its default (summary) and ask for more only if the summary is not enough; very large results are refused.""",
 }
 
 _DOMAIN_TOOL_MAP = {
@@ -582,6 +590,13 @@ _DOMAIN_TOOL_MAP = {
     "figma": {"mcp__figma__figma_get_file_info", "mcp__figma__figma_extract_design_tokens"},
     "cloudflare": {"mcp__cloudflare__cloudflare_list_workers", "mcp__cloudflare__cloudflare_dns_lookup"},
     "gdrive": {"mcp__gdrive__gdrive_search_files", "mcp__gdrive__gdrive_read_file_metadata"},
+    # REA (rea/allowed-tools.txt): the 10 of its 229 tools that stay enabled in the MCP denylist.
+    "reverse_engineering": {
+        "mcp__rea__open_binary", "mcp__rea__inspect_artifact", "mcp__rea__extract_artifact",
+        "mcp__rea__inspect_managed_artifact", "mcp__rea__inspect_managed_native_boundaries",
+        "mcp__rea__inspect_pe_resources", "mcp__rea__inspect_pe_imports", "mcp__rea__inspect_native_exports",
+        "mcp__rea__inspect_il2cpp_metadata", "mcp__rea__analyze_javascript_application",
+    },
 }
 
 _WORKSPACE_TERMINUS_TOOLS = (
@@ -591,7 +606,8 @@ _WORKSPACE_TERMINUS_TOOLS = (
 
 _TERMINUS_PRESERVED_DOMAINS = (
     "documents", "email", "notes_calendar_tasks", "ui", "sessions",
-    "notion", "obsidian", "blender", "pubmed", "github", "coursera", "canva", "figma", "cloudflare", "gdrive"
+    "notion", "obsidian", "blender", "pubmed", "github", "coursera", "canva", "figma", "cloudflare", "gdrive",
+    "reverse_engineering",
 )
 _TERMINUS_PRESERVED_TOOLS = set().union(
     *(_DOMAIN_TOOL_MAP[_d] for _d in _TERMINUS_PRESERVED_DOMAINS)
@@ -1567,6 +1583,19 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
     # it up by name instead. Same fix shape as the #3794 api_call case above:
     # seed the actual built-in tool deterministically, independent of
     # embedding retrieval.
+    # Reverse engineering (the REA MCP server). "Which DLLs does Game.exe import?"
+    # matches no other domain, so it was low-signal and a fresh chat got no tools.
+    if has(
+        r"\b(?:reverse[- ]?engineer\w*|decompil\w*|disassembl\w*|il2cpp|p/invoke|rea tools?)\b",
+        r"\b(?:dlls?|exe)\b",
+        r"\b(?:assembly-csharp|global-metadata|nw\.js|rpg ?maker)",
+        r"\b(?:managed|unity) assembl(?:y|ies)\b",
+        r"\.net assembl(?:y|ies)\b",
+        r"\b(?:pe|portable executable) (?:imports?|exports?|resources?|headers?)\b",
+        # The REA container's read-only mounts (see the rule pack): "what is inside /games/X/data.zip?"
+        r"(?<![\w.])/(?:games|saves)/",
+    ):
+        domains.add("reverse_engineering")
     if has(r"\bnotion\b"):
         domains.add("notion")
     if has(r"\bobsidian\b"):
