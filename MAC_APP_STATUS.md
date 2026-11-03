@@ -99,11 +99,16 @@ runner; no real model was touched)
   reasoning was left alone. Not seen: a spontaneous Qwen3.6 loop.
 
 **Keeping the Mac alive** (`src/memory_guard.py`, `src/docker_model_runner.py`)
-- Before a model loads, its weights (+15% + 1 GB) must fit in what is free plus
-  what unloading the other models returns, less a reserve (the larger of 3 GB and
-  6% of RAM). Memory is counted like Activity Monitor (app + wired + compressed).
-  A load that would push the Mac into swap is refused with the numbers and a
-  way to override (`ODYSSEUS_RAM_GUARD=0`).
+- Before a model loads, its estimated footprint must fit in what is free plus what
+  unloading the other models returns, less a reserve of 10% of RAM (at least
+  4 GB). The footprint is the weights, the KV cache at the served context (read
+  from the model's own metadata: layers, KV heads, head size, hybrid attention)
+  and 1.5 GB of buffers. Against measured loads: qwen3.6-35b @128k estimate 18.3
+  GB (measured 19), qwen3-8b @32k 10.7 (10), qwen3-vl-30b @16k 20.3 (20). Memory is
+  counted like Activity Monitor (app + wired + compressed). A load that would push
+  the Mac into swap is refused with the numbers and a way to override
+  (`ODYSSEUS_RAM_GUARD=0`). On the 48 GB Mac with ~27 GB used by other apps,
+  Qwen3.6 is refused until about 4 GB more is freed.
 - A watchdog unloads every chat model when macOS reports critical memory pressure
   on two checks in a row (10 s), and writes `logs/memory-guard.json`.
   `ODYSSEUS_MEMORY_GUARD=0` turns it off.

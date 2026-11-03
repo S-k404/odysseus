@@ -204,6 +204,42 @@ def _weights_gb(entry: Optional[dict]) -> Optional[float]:
     return float(m.group(1)) * _SIZE_UNITS[m.group(2).lower()] if m else None
 
 
+def _gguf_int(gguf: dict, suffix: str) -> Optional[int]:
+    for key, value in gguf.items():
+        if key.endswith(suffix):
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def estimate_load_gb(entry: Optional[dict], context: Optional[int]) -> Optional[float]:
+    """GiB a model needs once loaded: weights + KV cache at its served context + buffers.
+
+    The KV cache is read from the model's own metadata (layers, KV heads, head size,
+    and how often attention runs on hybrid models). Checked against measured loads:
+    qwen3-8b @32k 10 GB (estimate ~11), qwen3.6-35b @128k 19 GB (estimate ~19).
+    """
+    weights = _weights_gb(entry)
+    if weights is None:
+        return None
+    gguf = ((entry or {}).get("config") or {}).get("gguf") or {}
+    ctx = context or 0
+    layers = _gguf_int(gguf, ".block_count")
+    kv_heads = _gguf_int(gguf, ".attention.head_count_kv") or _gguf_int(gguf, ".attention.head_count")
+    key_len = _gguf_int(gguf, ".attention.key_length")
+    if not key_len:
+        emb, heads = _gguf_int(gguf, ".embedding_length"), _gguf_int(gguf, ".attention.head_count")
+        key_len = emb // heads if emb and heads else None
+    if layers and kv_heads and key_len and ctx:
+        value_len = _gguf_int(gguf, ".attention.value_length") or key_len
+        attention_layers = layers / (_gguf_int(gguf, ".full_attention_interval") or 1)
+        kv = ctx * attention_layers * kv_heads * (key_len + value_len) * 2 / 2 ** 30  # fp16
+        return weights + kv + 1.5
+    return weights * 1.15 + 1.0 + (ctx / 32768 * 2.5 if ctx else 0.0)
+
+
 def resident_models(endpoint_url: str, timeout: float = 3.0) -> Optional[List[str]]:
     """Chat models currently in memory (embedding runners excluded), None if unknown."""
     root = runner_root(endpoint_url)
@@ -220,9 +256,10 @@ def resident_models(endpoint_url: str, timeout: float = 3.0) -> Optional[List[st
 def ram_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Optional[str]:
     """Refuse a load that clearly would not fit, instead of letting the Mac swap itself to a halt.
 
-    Only fires when the model is not already in memory. The weights (plus a little
-    for the KV cache) must fit in what is free now plus what unloading the other
-    resident models gives back, less a reserve for macOS and your apps.
+    Only fires when the model is not already in memory. Its estimated footprint
+    (weights + KV cache at the served context) must fit in what is free now plus
+    what unloading the other resident models gives back, less a reserve of 10% of
+    RAM (at least 4 GB) for macOS and your apps.
     """
     if not model or not ram_guard_enabled():
         return None
@@ -230,8 +267,9 @@ def ram_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Opt
     if not root or not looks_like_dmr(endpoint_url) or not _maybe_dmr(root):
         return None
     entries = _runner_models(endpoint_url, timeout) or []
-    weights = _weights_gb(_model_entry(entries, model))
-    if weights is None:
+    entry = _model_entry(entries, model)
+    need = estimate_load_gb(entry, runner_context_size(endpoint_url, model, timeout))
+    if need is None:
         return None
     from src import memory_guard
     snap = memory_guard.snapshot()
@@ -239,8 +277,7 @@ def ram_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Opt
     if not snap or resident is None or model in resident:
         return None
     reclaim = sum(1.15 * (_weights_gb(_model_entry(entries, m)) or 0.0) for m in resident)
-    need = weights * 1.15 + 1.0
-    reserve = max(3.0, 0.06 * float(snap["total_gb"]))
+    reserve = max(4.0, 0.10 * float(snap["total_gb"]))
     spare = float(snap["available_gb"]) + reclaim - reserve
     if snap["pressure"] >= 4:
         return (

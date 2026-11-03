@@ -86,6 +86,27 @@ def test_load_that_fits_is_allowed(monkeypatch):
     assert dmr.ram_block_reason(URL, "big:35b") is None
 
 
+def test_footprint_includes_the_kv_cache_read_from_the_model_metadata():
+    # qwen3-8b: 36 layers, 8 KV heads, 128-wide heads, served at 32k -> ~4.5 GB of KV cache.
+    gguf = {"qwen3.block_count": "36", "qwen3.attention.head_count_kv": "8", "qwen3.attention.key_length": "128"}
+    entry = {"config": {"size": "4.68GiB", "gguf": gguf}}
+    assert dmr.estimate_load_gb(entry, 32768) == pytest.approx(4.68 + 4.5 + 1.5, abs=0.05)
+
+
+def test_hybrid_attention_models_use_far_less_kv_cache():
+    # qwen3.6-35b-a3b: attention only every 4th layer, 2 KV heads, 256-wide heads, 128k context.
+    gguf = {"qwen35moe.block_count": "40", "qwen35moe.attention.head_count_kv": "2",
+            "qwen35moe.attention.key_length": "256", "qwen35moe.attention.value_length": "256",
+            "qwen35moe.full_attention_interval": "4"}
+    entry = {"config": {"size": "14.29GiB", "gguf": gguf}}
+    assert dmr.estimate_load_gb(entry, 131072) == pytest.approx(14.29 + 2.5 + 1.5, abs=0.1)
+
+
+def test_without_metadata_the_estimate_falls_back_to_weights_plus_margin():
+    assert dmr.estimate_load_gb({"config": {"size": "10GiB"}}, None) == pytest.approx(12.5)
+    assert dmr.estimate_load_gb({"config": {}}, 32768) is None
+
+
 def test_other_resident_models_are_counted_as_reclaimable(monkeypatch):
     # 8 GB free, but the 17 GB model in memory is unloaded before this one loads.
     _setup(monkeypatch, available=8.0, resident=["other:30b"])
