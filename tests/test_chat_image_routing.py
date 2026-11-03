@@ -41,13 +41,14 @@ def _session(model="qwen3.5:latest", endpoint_url="http://localhost:11434/v1/cha
     return SimpleNamespace(model=model, endpoint_url=endpoint_url)
 
 
-def _endpoint(base_url, model_type="image", models=None):
+def _endpoint(base_url, model_type="image", models=None, pinned=None, enabled=True):
     cached_models = None if models is None else json.dumps(models)
     return SimpleNamespace(
         base_url=base_url,
         model_type=model_type,
-        is_enabled=True,
+        is_enabled=enabled,
         cached_models=cached_models,
+        pinned_models=None if pinned is None else json.dumps(pinned),
     )
 
 
@@ -95,3 +96,61 @@ def test_matching_image_endpoint_routes_selected_image_model(monkeypatch):
     monkeypatch.setattr(chat_routes, "SessionLocal", lambda: db)
 
     assert chat_routes._is_image_generation_session(_session(model="sdxl-local"))
+
+
+# One Docker Model Runner serves chat and image models from the same base URL, so it can
+# be registered twice: a chat endpoint and an "image" endpoint. The image endpoint's model
+# cache then lists the whole server, and "the cache contains the model" sent every chat to
+# image generation (Qwen answered with `unsupported backend mode "image-generation"`).
+DMR = "http://127.0.0.1:12434/v1"
+DMR_MODELS = [
+    "docker.io/ai/stable-diffusion:latest",
+    "huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S",
+    "huggingface.co/unsloth/qwen3-8b-gguf:Q4_K_M",
+]
+
+
+def test_image_endpoint_sharing_a_server_with_a_chat_endpoint_does_not_catch_chat_models(monkeypatch):
+    db = _FakeDb([
+        _endpoint(DMR, "llm", models=DMR_MODELS),
+        _endpoint(DMR, "image", models=DMR_MODELS, pinned=["docker.io/ai/stable-diffusion:latest"]),
+    ])
+    monkeypatch.setattr(chat_routes, "SessionLocal", lambda: db)
+    session = _session(model="huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S",
+                       endpoint_url=DMR + "/chat/completions")
+
+    assert not chat_routes._is_image_generation_session(session)
+
+
+def test_shared_server_image_endpoint_without_pinned_models_catches_nothing_by_cache(monkeypatch):
+    db = _FakeDb([
+        _endpoint(DMR, "llm", models=DMR_MODELS),
+        _endpoint(DMR, "image", models=DMR_MODELS),
+    ])
+    monkeypatch.setattr(chat_routes, "SessionLocal", lambda: db)
+
+    assert not chat_routes._is_image_generation_session(
+        _session(model="huggingface.co/unsloth/qwen3-8b-gguf:Q4_K_M", endpoint_url=DMR + "/chat/completions"))
+
+
+def test_shared_server_image_endpoint_still_claims_its_pinned_model(monkeypatch):
+    db = _FakeDb([
+        _endpoint(DMR, "llm", models=DMR_MODELS + ["my-custom-painter"]),
+        _endpoint(DMR, "image", models=DMR_MODELS + ["my-custom-painter"], pinned=["my-custom-painter"]),
+    ])
+    monkeypatch.setattr(chat_routes, "SessionLocal", lambda: db)
+
+    assert chat_routes._is_image_generation_session(
+        _session(model="my-custom-painter", endpoint_url=DMR + "/chat/completions"))
+
+
+def test_disabled_chat_endpoint_does_not_make_an_image_endpoint_shared(monkeypatch):
+    """Only an enabled chat endpoint on the same server shares it; the old cache rule still applies otherwise."""
+    db = _FakeDb([
+        _endpoint(DMR, "llm", models=DMR_MODELS, enabled=False),
+        _endpoint(DMR, "image", models=["my-custom-painter"]),
+    ])
+    monkeypatch.setattr(chat_routes, "SessionLocal", lambda: db)
+
+    assert chat_routes._is_image_generation_session(
+        _session(model="my-custom-painter", endpoint_url=DMR + "/chat/completions"))
