@@ -31,7 +31,11 @@ export const THEMES = {
                 advanced: { sendBtnBg: '#f4f4f5', sendBtnHover: '#ffffff',
                             userBubbleBg: '#252528', aiBubbleBg: 'transparent',
                             inputBg: '#252528', brandColor: '#d97757', brandMixTo: '#d97757' } },
-  cute:       { bg:'#fff0f5', fg:'#d4608a', panel:'#fff8fa', border:'#f0c0d0', red:'#ff6b9d' },
+  'claude-light': { bg:'#faf9f5', fg:'#1f1e1d', panel:'#ffffff', border:'#e3e0d3', red:'#d97757',
+                advanced: { sendBtnBg: '#c96442', sendBtnHover: '#b4553a',
+                            sidebarBg: '#f0eee6', userBubbleBg: '#f0eee6', aiBubbleBg: 'transparent',
+                            inputBg: '#ffffff', brandColor: '#d97757', brandMixTo: '#d97757' } },
+  cute:      { bg:'#fff0f5', fg:'#d4608a', panel:'#fff8fa', border:'#f0c0d0', red:'#ff6b9d' },
 };
 
 const DEFAULT_THEME = 'claude';
