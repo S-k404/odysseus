@@ -1,4 +1,4 @@
-"""Free local model RAM when the user switches model or starts a new chat."""
+"""Free local model RAM (Docker Model Runner, Ollama) when the user switches model or starts a new chat."""
 
 import asyncio
 
@@ -9,6 +9,7 @@ from core.database import ModelEndpoint, SessionLocal
 from src.auth_helpers import require_user
 from src.docker_model_runner import load_block_reason, looks_like_dmr, runner_root
 from src.llm_core import release_local_models
+from src.ollama_runner import looks_like_ollama
 
 
 class ReleaseRequest(BaseModel):
@@ -25,7 +26,7 @@ def _runner_urls() -> list:
     seen, out = set(), []
     for url in urls:
         root = runner_root(url or "")
-        if root and looks_like_dmr(url) and root not in seen:
+        if root and (looks_like_dmr(url) or looks_like_ollama(url)) and root not in seen:
             seen.add(root)
             out.append(url)
     return out
@@ -40,7 +41,7 @@ def setup_local_model_routes():
         urls = _runner_urls()
         # Picking a model that will be refused shouldn't cost the working one.
         for url in urls:
-            if await asyncio.to_thread(load_block_reason, url, keep):
+            if looks_like_dmr(url) and await asyncio.to_thread(load_block_reason, url, keep):
                 return {"unloaded": [], "skipped": "blocked"}
         return await release_local_models(urls, keep=keep)
 

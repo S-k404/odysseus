@@ -142,6 +142,9 @@ runner; no real model was touched)
 - Picking a model, or starting a new chat, unloads the other models right away
   (`POST /api/local-models/release`). It is skipped while a reply is
   generating. Verified end to end against a fake model runner.
+- Ollama gets the same treatment (`src/ollama_runner.py`, `keep_alive: 0`): the
+  old model is unloaded on a switch and by the memory watchdog. Verified on the
+  real `qwen2.5:1.5b`: loaded, then unloaded by switching to another model.
 - Safetensors models on the vLLM-Metal backend are refused, because that
   backend reserves about 90% of RAM. The chat explains why. Override with
   `ODYSSEUS_ALLOW_VLLM_METAL=1`.
@@ -246,8 +249,6 @@ hosts, and the model runner guard and unload.
   search, and no TTS/STT.
 - With ChromaDB down, MCP tool choice is by words only, so a vague request
   ("look into that board") gets no MCP tool until it names one.
-- Ollama models are not unloaded on switch. They unload themselves after 5
-  minutes idle, and the 1.5B model is about 1 GB.
 - Branch history: this work is 509 commits behind upstream
   `pewdiepie-archdaemon/odysseus`. Some MCP servers in `mcp_servers/` (arxiv,
   coursera, game_save, sqlite_explorer, …) came from other agents and have not
@@ -268,5 +269,5 @@ hosts, and the model runner guard and unload.
    resolve conflicts, and rerun the full suite.
 5. **RAM headroom.** If the Mac still feels tight, package qwen3.6-35b at 64k
    context (`docker model package --from … --context-size 65536`), which
-   costs less RAM than 128k. Optionally add Ollama unload (`keep_alive: 0`).
+   costs less RAM than 128k.
 6. **Review the other agents' MCP servers** and remove the stubs or duplicates.

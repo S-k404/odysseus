@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from typing import Optional, Dict, List, Tuple
 from src.model_context import get_context_length, DEFAULT_CONTEXT, is_local_endpoint
 from src.docker_model_runner import load_block_reason, unload_other_models as unload_other_runner_models
+from src.ollama_runner import unload_other_models as unload_other_ollama_models
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -134,7 +135,7 @@ async def _local_model_slot(target_url: str, model: str, workload: Optional[str]
         # Holding the lock means no other Odysseus call is generating, so the
         # previous model can be freed before this one loads (Docker Model
         # Runner otherwise keeps both resident and macOS starts swapping).
-        await unload_other_runner_models(target_url, model)
+        await _unload_other_local_models(target_url, model)
         yield
     finally:
         if kind == "foreground":
@@ -146,8 +147,13 @@ async def _local_model_slot(target_url: str, model: str, workload: Optional[str]
             _LOCAL_MODEL_LOCK.release()
 
 
+async def _unload_other_local_models(url: str, model: str) -> List[str]:
+    """Each runner only acts on its own kind of address, so one of these is a no-op."""
+    return await unload_other_runner_models(url, model) + await unload_other_ollama_models(url, model)
+
+
 async def release_local_models(endpoint_urls: List[str], keep: str = "") -> Dict[str, object]:
-    """Unload Docker Model Runner models other than ``keep`` right away.
+    """Unload Docker Model Runner and Ollama models other than ``keep`` right away.
 
     Called when the user switches model or starts a new chat, so the previous
     model's RAM is freed at once instead of at the next request. Skipped while
@@ -159,7 +165,7 @@ async def release_local_models(endpoint_urls: List[str], keep: str = "") -> Dict
     unloaded: List[str] = []
     async with _LOCAL_MODEL_LOCK:
         for url in endpoint_urls:
-            unloaded += await unload_other_runner_models(url, keep)
+            unloaded += await _unload_other_local_models(url, keep)
     return {"unloaded": unloaded}
 
 class LLMConfig:
