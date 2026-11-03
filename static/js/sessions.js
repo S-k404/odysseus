@@ -10,6 +10,7 @@ import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
 import { releaseLocalModels } from './localModels.js';
 import { keepRecentModelPick } from './modelPickReconcile.js';
+import { summarizeProjects } from './projectsPage.js';
 
 const API_BASE = window.location.origin;
 
@@ -386,6 +387,22 @@ export function newChatInProject(projectName) {
     projNameEl.textContent = `Projects - ${projectName}`;
     projWrap.style.display = 'inline-flex';
   }
+}
+
+/** Project folders with chat counts and last activity, for the Projects page. */
+export function getProjectSummaries() {
+  return summarizeProjects(sessions, loadAllProjectFolders());
+}
+
+/** Open a project: expand it in the sidebar and show its latest chat (or start one). */
+export function openProject(name) {
+  const state = loadFolderState();
+  state[name] = true;
+  saveFolderState(state);
+  const latest = getProjectSummaries().find(p => p.name === name);
+  renderSessionList();
+  if (latest && latest.latestId) return selectSession(latest.latestId);
+  newChatInProject(name);
 }
 
 export async function promptCreateProject() {
@@ -3690,7 +3707,9 @@ const sessionModule = {
   deleteCurrentSessionFromTopMenu,
   promptCreateProject,
   newChatInProject,
-  loadAllProjectFolders
+  loadAllProjectFolders,
+  getProjectSummaries,
+  openProject
 };
 
 export { updateModelPicker };

@@ -132,6 +132,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         window.contentView?.addSubview(webView)
         window.contentView?.addSubview(splashView)
 
+        // Remember where you left the window, like Claude Desktop (restores a saved frame).
+        window.setFrameAutosaveName("OdysseusMainWindow")
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

@@ -1798,3 +1798,113 @@ body.sidebar-collapsed .claude-chat-top-bar {
 #welcome-screen .welcome-sub:empty {
   display: none;
 }
+
+/* ── 13. Projects page (sidebar > Projects) ── */
+#projects-modal {
+  background: color-mix(in srgb, #000 38%, transparent);
+  pointer-events: auto;
+}
+.projects-modal-content {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 22px 18px;
+  border-radius: 16px;
+  pointer-events: auto;
+}
+.projects-header { display: flex; align-items: center; gap: 10px; }
+.projects-title {
+  flex: 1;
+  margin: 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--fg);
+}
+.projects-new-btn {
+  padding: 6px 13px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--send-btn-bg, var(--accent, var(--red)));
+  color: var(--bg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.projects-new-btn:hover { filter: brightness(1.08); }
+.projects-close-btn {
+  width: 28px; height: 28px;
+  border: none; border-radius: 8px;
+  background: transparent;
+  color: color-mix(in srgb, var(--fg) 60%, transparent);
+  font-size: 20px; line-height: 1;
+  cursor: pointer;
+}
+.projects-close-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
+.projects-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.projects-search:focus { border-color: color-mix(in srgb, var(--accent, var(--red)) 55%, var(--border)); }
+.projects-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; padding: 2px; }
+.projects-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.projects-card:hover, .projects-card:focus-visible {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  border-color: var(--border);
+  outline: none;
+}
+.projects-card-text { flex: 1; min-width: 0; }
+.projects-card-name { font-size: 14px; font-weight: 500; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projects-card-meta { margin-top: 3px; font-size: 12px; color: color-mix(in srgb, var(--fg) 55%, transparent); }
+.projects-card-action {
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: transparent;
+  color: color-mix(in srgb, var(--fg) 75%, transparent);
+  font: inherit; font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.projects-card:hover .projects-card-action, .projects-card:focus-within .projects-card-action { opacity: 1; }
+.projects-card-action:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.projects-empty { padding: 28px 8px; text-align: center; font-size: 13px; line-height: 1.5; color: color-mix(in srgb, var(--fg) 55%, transparent); }
+
+/* ── 14. Welcome screen: readable hints ──
+   The tip and the Nobody toggle were drawn at 20-25% opacity, which on dark and
+   light themes alike is close to invisible. */
+#welcome-screen .welcome-tip { opacity: 0.55 !important; }
+.incognito-btn { opacity: 0.6 !important; }
+.incognito-btn:hover { opacity: 0.95 !important; }
+.incognito-btn.active { opacity: 1 !important; }
+
+/* ── 15. Composer pills stay on one line ──
+   At narrow window widths "Max Context" and "Thinking: High (16k)" wrapped onto
+   two lines. Keep them single-line, and let the Context pill shrink to its icon
+   in a narrow window instead. */
+.ody-composer-pill { white-space: nowrap !important; flex: 0 0 auto !important; }
+@media (max-width: 900px) {
+  .ody-composer-pill.context-pill #context-mode-label { display: none; }
+  .ody-composer-pill.context-pill { padding: 4px 8px !important; }
+}
