@@ -4,7 +4,7 @@
 import { providerLogo } from './providers.js';
 import uiModule from './ui.js';
 import settingsModule from './settings.js';
-import { sortModelObjects } from './modelSort.js';
+import { isNonChatModelId, sortModelObjects } from './modelSort.js';
 import spinnerModule from './spinner.js';
 import { releaseLocalModels } from './localModels.js';
 
@@ -395,6 +395,8 @@ function _initModelPickerDropdown() {
       const isLocalDead = !!(probeResult && probeResult.alive === false);
       const isApiEndpoint = item.category && item.category !== 'local';
       allModels.forEach((mid, i) => {
+        // Voice, embedding and image models live in their own settings, not here.
+        if (isNonChatModelId(mid)) return;
         // Local/self-hosted servers often expose the same model through several
         // stale endpoints, so keep deduping those by model id. Cloud/API
         // endpoints are user-selected provider routes; the same model id can be

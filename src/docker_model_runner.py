@@ -128,6 +128,39 @@ def _model_entry(entries: list, model: str) -> Optional[dict]:
     return None
 
 
+def _weights_key(entry: dict) -> Optional[tuple]:
+    """What identifies an entry's weights, ignoring the packaged context size."""
+    cfg = entry.get("config") or {}
+    key = tuple(cfg.get(k) for k in ("format", "architecture", "parameters", "quantization", "size"))
+    return key if all(key) else None
+
+
+def hide_untagged_duplicates(
+    endpoint_url: str, model_ids: List[str], keep: Optional[List[str]] = None, timeout: float = 1.5
+) -> List[str]:
+    """Drop untagged ``sha256:…`` ids that a listed, tagged model already covers.
+
+    ``docker model package`` leaves the original blob behind, untagged, next to
+    the repackaged one, so /v1/models shows the same weights twice. The tagged
+    entry is the one to use. An untagged model with no listed tagged twin stays,
+    and so does anything in ``keep`` (pinned by the user).
+    """
+    if not model_ids or not looks_like_dmr(endpoint_url):
+        return model_ids
+    entries = _runner_models(endpoint_url, timeout)
+    if not entries:
+        return model_ids
+    listed = set(model_ids)
+    twins = {
+        key
+        for e in entries
+        if any(t in listed for t in e.get("tags") or []) and (key := _weights_key(e))
+    }
+    hidden = {e["id"] for e in entries if not e.get("tags") and _weights_key(e) in twins}
+    hidden -= set(keep or [])
+    return [m for m in model_ids if m not in hidden]
+
+
 def load_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Optional[str]:
     """Why loading ``model`` would take the Mac down, or None if it's safe."""
     if not model or allow_vllm_metal():

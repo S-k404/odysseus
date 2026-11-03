@@ -432,7 +432,7 @@ import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens 
     opts = opts || {};
     const tsSpan = roleEl.querySelector('.role-timestamp');
     const req = requestedModel || actualModel || '';
-    const actual = actualModel || requestedModel || '';
+    const actual = (chatRenderer.isRunnerAlias(actualModel) ? '' : actualModel) || requestedModel || '';
     let label = _modelRouteLabel(
       req,
       actual,
@@ -2513,7 +2513,7 @@ import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens 
         _thinkingRecheckAt = 0;
         _finalizeLiveThinking(_closedThinkingText(roundText), rich);
         const elapsed = thinkingStartTime ? ((Date.now() - thinkingStartTime) / 1000).toFixed(1) : null;
-        if (_liveThinkHeader) _liveThinkHeader.textContent = 'View thinking process';
+        if (_liveThinkHeader) _liveThinkHeader.textContent = 'Thought process';
         if (_liveThinkTimerEl) _liveThinkTimerEl.textContent = elapsed ? _formatThinkStats(elapsed, _liveThinkTokenCount) : '';
         if (_liveThinkSpinnerSlot) _liveThinkSpinnerSlot.remove();
       }
@@ -2556,7 +2556,7 @@ import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens 
           accumulated = accumulated.replace(/<think>/i, '<think time="' + elapsed + '">');
           roundText = roundText.replace(/<think>/i, '<think time="' + elapsed + '">');
         }
-        if (_liveThinkHeader) _liveThinkHeader.textContent = 'View thinking process';
+        if (_liveThinkHeader) _liveThinkHeader.textContent = 'Thought process';
         if (_liveThinkSpinnerSlot) _liveThinkSpinnerSlot.remove();
         if (_liveThinkTimerEl && elapsed) {
           _liveThinkTimerEl.textContent = _formatThinkStats(elapsed, _liveThinkTokenCount);
@@ -2850,7 +2850,7 @@ import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens 
                   accumulated = accumulated.replace(/<think>/i, '<think time="' + _elapsedDone + '">');
                   roundText = roundText.replace(/<think>/i, '<think time="' + _elapsedDone + '">');
                 }
-                if (_liveThinkHeader) _liveThinkHeader.textContent = 'View thinking process';
+                if (_liveThinkHeader) _liveThinkHeader.textContent = 'Thought process';
                 if (_liveThinkSpinnerSlot) _liveThinkSpinnerSlot.remove();
                 if (_liveThinkTimerEl && _elapsedDone) {
                   _liveThinkTimerEl.textContent = _formatThinkStats(_elapsedDone, _liveThinkTokenCount);

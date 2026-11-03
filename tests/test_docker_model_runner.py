@@ -74,6 +74,44 @@ def test_context_size_uses_tagged_entry(monkeypatch):
     assert dmr.runner_context_size(URL, "ai/qwen3:8B") == 32768
 
 
+def _weights(size, context):
+    return {"format": "gguf", "architecture": "qwen3", "parameters": "8.19B",
+            "quantization": "MOSTLY_Q4_K_M", "size": size, "context_size": context}
+
+
+TWINS = [
+    # `docker model package` left the 8k original behind next to the 32k repackage.
+    {"id": "sha256:orig", "config": _weights("4.68GiB", 8192)},
+    {"id": "sha256:pkg", "tags": ["ai/qwen3:8B"], "config": _weights("4.68GiB", 32768)},
+    {"id": "sha256:solo", "config": _weights("9.99GiB", 8192)},  # no tagged twin
+    {"id": "sha256:bare", "config": {"format": "gguf"}},  # too little metadata to match
+]
+PICKER = ["ai/qwen3:8B", "sha256:orig", "sha256:solo", "sha256:bare"]
+
+
+def test_untagged_copy_of_a_tagged_model_is_hidden(monkeypatch):
+    _serve(monkeypatch, models=TWINS)
+    assert dmr.hide_untagged_duplicates(URL, PICKER) == ["ai/qwen3:8B", "sha256:solo", "sha256:bare"]
+
+
+def test_untagged_copy_is_kept_when_its_tagged_twin_is_not_listed(monkeypatch):
+    _serve(monkeypatch, models=TWINS)
+    assert dmr.hide_untagged_duplicates(URL, ["sha256:orig", "sha256:solo"]) == ["sha256:orig", "sha256:solo"]
+
+
+def test_pinned_untagged_copy_is_kept(monkeypatch):
+    _serve(monkeypatch, models=TWINS)
+    assert "sha256:orig" in dmr.hide_untagged_duplicates(URL, PICKER, keep=["sha256:orig"])
+
+
+def test_duplicates_are_left_alone_off_the_runner_or_when_it_is_down(monkeypatch):
+    calls = _serve(monkeypatch, models=TWINS)
+    assert dmr.hide_untagged_duplicates("http://127.0.0.1:8080/v1", PICKER) == PICKER
+    assert calls == []
+    _serve(monkeypatch, models=None)
+    assert dmr.hide_untagged_duplicates(URL, PICKER) == PICKER
+
+
 class _Resp:
     def __init__(self, data=None, status=200):
         self._data, self.status_code = data, status
