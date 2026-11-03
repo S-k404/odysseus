@@ -9,6 +9,7 @@ import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260722c
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
 import { releaseLocalModels } from './localModels.js';
+import { keepRecentModelPick } from './modelPickReconcile.js';
 
 const API_BASE = window.location.origin;
 
@@ -1643,6 +1644,7 @@ function _animateSessionRowsRemoving(ids, selector) {
 }
 
 export async function loadSessions() {
+  const _fetchStartedAt = Date.now();
   try {
     // Delete incognito sessions left over from a previous page load
     await _cleanupIncognitoSessions();
@@ -1674,6 +1676,8 @@ export async function loadSessions() {
     if (!Array.isArray(fetched)) {
       throw new Error('Session request returned an invalid response');
     }
+    // A model picked while this was in flight may not be in the response yet.
+    keepRecentModelPick(fetched, _fetchStartedAt, window.__odysseusLastPickedRoute, !!window.__odysseusModelSwitchPromise);
     sessions = _normalizeSessionsList(fetched);
     renderSessionList();
 

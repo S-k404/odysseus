@@ -768,6 +768,8 @@ async function _pick(m) {
     };
     const currentSessionId = _deps.getCurrentSessionId();
     const _pendingChat = _deps.getPendingChat();
+    // loadSessions() uses this to keep the pick if its response predates the PATCH.
+    try { window.__odysseusLastPickedRoute.session_id = currentSessionId || ''; } catch (_) {}
 
     // Remember this pick so it surfaces under "Recent" next time the picker
     // opens — the whole point of quick-switch.
@@ -822,6 +824,7 @@ async function _pick(m) {
           return;
         }
         // Header stays as session name — model info shown in picker only
+        try { Object.assign(window.__odysseusLastPickedRoute, { persisted: true, done_at: Date.now() }); } catch (_) {}
       } catch (e) {
         uiModule.showError('Failed to set model: ' + e);
         finishSwitch();
