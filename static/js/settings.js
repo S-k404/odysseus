@@ -624,7 +624,21 @@ async function initImageSettings() {
   try {
     const settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
     const settings = await settingsRes.json();
-    if (settings.image_model) modelSel.value = settings.image_model;
+    if (settings.image_model) {
+      // The list above only offers inpaint-capable ids (for the Gallery's inpaint/harmonize editor). A plain
+      // text-to-image model — e.g. the local docker.io/ai/stable-diffusion:latest DMR endpoint — still works
+      // for ordinary generation (the image_gen tool has no inpaint requirement) but was silently missing from
+      // the dropdown, leaving the picker looking empty while generation worked fine. Show it, labelled so it's
+      // clear it won't appear as an inpaint option elsewhere.
+      const alreadyListed = Array.from(modelSel.options).some(o => o.value === settings.image_model);
+      if (!alreadyListed) {
+        const opt = document.createElement('option');
+        opt.value = settings.image_model;
+        opt.textContent = settings.image_model + ' (configured — text-to-image only, no inpaint)';
+        modelSel.appendChild(opt);
+      }
+      modelSel.value = settings.image_model;
+    }
     if (settings.image_quality) qualSel.value = settings.image_quality;
     if (enabledToggle) enabledToggle.checked = settings.image_gen_enabled === true;
   } catch (e) { console.warn('Failed to load settings', e); }
