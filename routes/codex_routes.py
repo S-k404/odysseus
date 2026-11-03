@@ -891,20 +891,42 @@ def setup_claude_routes() -> APIRouter:
     @router.get("/plugin.zip")
     def plugin_zip(request: Request):
         require_authenticated_request(request)
-        # Only ship the skills/ subtree so extracting at ~/.claude/ doesn't dump
-        # README.md or other bundle metadata into the user's claude config dir.
-        skills_root = Path(__file__).resolve().parent.parent / "integrations" / "claude" / "skills"
-        if not skills_root.exists():
-            raise HTTPException(404, "Claude skill bundle not found")
-        bundle_root = skills_root.parent
-        buf = BytesIO()
-        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for path in sorted(skills_root.rglob("*")):
-                if path.is_dir() or "__pycache__" in path.parts or path.suffix == ".pyc":
-                    continue
-                zf.write(path, path.relative_to(bundle_root))
-        buf.seek(0)
-        headers = {"Content-Disposition": 'attachment; filename="odysseus-claude-skill.zip"'}
-        return StreamingResponse(buf, media_type="application/zip", headers=headers)
+        return _skill_bundle_response("claude", "Claude")
 
     return router
+
+
+def setup_antigravity_routes() -> APIRouter:
+    """Serve the Antigravity (Gemini) skill bundle.
+
+    Antigravity discovers skills under ``~/.gemini/config/skills/`` and calls the
+    same scope-gated `/api/codex/*` endpoints at runtime; this router only
+    delivers the zip via `/api/antigravity/plugin.zip`.
+    """
+    router = APIRouter(prefix="/api/antigravity", tags=["antigravity"])
+
+    @router.get("/plugin.zip")
+    def plugin_zip(request: Request):
+        require_authenticated_request(request)
+        return _skill_bundle_response("antigravity", "Antigravity")
+
+    return router
+
+
+def _skill_bundle_response(agent: str, label: str) -> StreamingResponse:
+    """Zip ``integrations/<agent>/skills`` so it extracts straight into the agent's config dir."""
+    # Only ship the skills/ subtree so extracting doesn't dump README.md or other
+    # bundle metadata into the user's agent config dir.
+    skills_root = Path(__file__).resolve().parent.parent / "integrations" / agent / "skills"
+    if not skills_root.exists():
+        raise HTTPException(404, f"{label} skill bundle not found")
+    bundle_root = skills_root.parent
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(skills_root.rglob("*")):
+            if path.is_dir() or "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            zf.write(path, path.relative_to(bundle_root))
+    buf.seek(0)
+    headers = {"Content-Disposition": f'attachment; filename="odysseus-{agent}-skill.zip"'}
+    return StreamingResponse(buf, media_type="application/zip", headers=headers)
