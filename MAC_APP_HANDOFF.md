@@ -3,7 +3,9 @@
 For the next person or Claude session picking this up. Current state and the
 plan are in `MAC_APP_STATUS.md`; this file is how to work on it safely.
 
-Last updated 2026-11-03. Branch `mac-app-claude-desktop` (`main` untouched).
+Last updated 2026-11-03. Branch `mac-app-claude-desktop`. Local `main` was
+fast-forwarded to `870002db` at the owner's request (nothing has ever been pushed);
+the branch is one commit ahead of it (`cb51a746`, Ollama unload).
 
 ## Goal and rules from the owner
 
@@ -15,13 +17,58 @@ Last updated 2026-11-03. Branch `mac-app-claude-desktop` (`main` untouched).
 - Don't overwrite the saved theme (`data/user_prefs.json`: a custom palette
   with the rain effect) without asking. The built-in `claude` theme is the
   Claude Desktop look.
-- Don't unload or load real models while testing. Another Claude Code session
-  (the bridgeplay project's `local_agent.py`) uses qwen3.6-35b through Docker
-  Model Runner. Test against the fake runner below.
+- Don't unload or load real models while testing unless the owner says so.
+  Another Claude Code session (the bridgeplay project's `local_agent.py`) uses
+  qwen3.6-35b through Docker Model Runner. Test against the fake runner below.
+  The owner has allowed, once each: loading qwen3-8b in Docker Model Runner,
+  then unloading it, and loading Ollama's 1 GB `qwen2.5:1.5b`.
 - Don't print secrets from `.env` or `data/`.
 - Commit or push only when asked. `workspace/` (generated test files) and
   `swift/odysseus-macos` (compiled binary) are intentionally untracked.
   Other agents' files (`mcp_servers/…`) may show as modified; they aren't ours.
+
+## Pick up here (end of the 2026-11-03 session)
+
+**Done and committed on the branch:** loop protection for every local model,
+the memory guard, the menu bar item, the Projects page and Claude-style welcome
+and composer polish, Antigravity support, MCP discovery without ChromaDB, and
+Ollama unload on switch. Details are in `MAC_APP_STATUS.md`.
+
+**Not ours, left uncommitted on purpose.** Another session has work in progress
+in this folder. Do not commit, revert or "clean up" these without the owner:
+- `src/constants.py` (`MAX_MCP_OUTPUT_CHARS`), `src/mcp_manager.py` (cuts one MCP
+  result at 100k characters), `src/context_compactor.py` (shrinks oversized tool
+  results before dropping anything else) and `tests/test_oversized_tool_results.py`.
+  Those 8 tests pass.
+- `mcp_servers/game_save_server.py`, `mcp_servers/GAME_SAVES_STATUS.md`,
+  `mcp_servers/game_save_server.py.pre-es3`, `mcp_servers/game_saves_dev/`.
+- `workspace/` and `swift/odysseus-macos` are generated and stay untracked.
+
+**Open, in the order the owner would feel them:**
+1. The installed app predates the window-position memory
+   (`setFrameAutosaveName` in `swift/OdysseusApp.swift`). Quit the app, then run
+   `./build-macos-app.sh`. It was not reinstalled because the app was open.
+2. Qwen3.6-35b has not been tried for real: a spontaneous loop and the retry
+   with thinking off are verified on qwen3-8b only. It needs about 18 GB free.
+3. The menu bar icon has been checked by position and menu, not by eye.
+4. The Docker image needs `docker compose up -d --build` before the next Docker
+   run, and Docker stays off until the owner says otherwise.
+5. A project is still only a folder of chats. Project instructions and files
+   (as in Claude's projects) are the next Claude-parity step.
+6. ChromaDB, SearXNG and Speaches only run in the Docker stack; the upstream
+   merge is 509 commits behind.
+
+**Gotchas that cost time:**
+- Run Python as `.venv/bin/python`. The system `python` is a stub that asks to
+  install developer tools, and `python3` has no pytest.
+- macOS has no `timeout`: use `perl -e 'alarm N; exec @ARGV' cmd`.
+- After adding an import to `static/js/sessions.js`, copy that module in
+  `tests/test_startup_session_bootstrap_js.py` or the test fails with
+  `ERR_MODULE_NOT_FOUND` (it happened three times).
+- The server sends UTC times without a `Z`; use `relativeTime` in
+  `static/js/projectsPage.js`, not `new Date(iso)`, to show them.
+- `stream_llm` holds the non-reentrant local-model lock, so a retry inside it
+  must call `_stream_llm_inner`, not `stream_llm`.
 
 ## Safe testing (nothing real is touched)
 
@@ -47,8 +94,8 @@ scripts/dev/scratch_server.sh stop
   `/Applications/Google Chrome.app`.
 - The scratch server uses its own data dir and no auth, so it doesn't collide
   with the Mac app on 7860.
-- Tests: `.venv/bin/python -m pytest -q` (about 4 min, 5941 passed, 3 skipped
-  at the last full run). Quick set for model work:
+- Tests: `.venv/bin/python -m pytest -q` (6035 passed, 3 skipped at the
+  last full run, before the Ollama tests). Quick set for model work:
   `tests/test_docker_model_runner.py tests/test_model_sort_js.py
   tests/test_model_routes.py tests/test_startup_session_bootstrap_js.py`.
 - Some tests read the real `data/`. Per `tests/TESTING_STANDARD.md`, stub local
