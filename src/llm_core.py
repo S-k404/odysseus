@@ -3,6 +3,7 @@ import httpx
 import asyncio
 import copy
 import time
+import zlib
 import json
 import logging
 import hashlib
@@ -383,60 +384,102 @@ _DEGENERATE_WORD_RE = re.compile(r"[A-Za-z0-9_\u0370-\u03ff\u0400-\u04ff]+")
 # I'll be concise. I'll write the response. ...") repeats no single token or
 # 4-word phrase often enough for the checks below, yet never reaches an answer.
 _LOOP_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
-_LOOP_WINDOW = 40         # recent sentences compared
-_LOOP_MAX_DISTINCT = 12   # a full window with this few different sentences is a loop
+_LOOP_WINDOW = 40                # recent sentences compared
+_LOOP_MAX_DISTINCT = 12          # thinking: a full window with this few different sentences is a loop
+_LOOP_MAX_DISTINCT_ANSWER = 8    # answer text is held to a stricter line
+# Loops whose sentences vary a little ("I'll mention `A.dll`", "I'll mention `B.dll`")
+# still compress far better than any real text. Measured over 4,157 windows of
+# code and docs: the most compressible was 0.171; synthetic loops were 0.04-0.12.
+_LOOP_COMPRESS_WINDOW = 3000     # chars
+_LOOP_COMPRESS_EVERY = 400       # re-check after this many new chars
+_LOOP_COMPRESS_RATIO = 0.14      # thinking text
+_LOOP_COMPRESS_RATIO_ANSWER = 0.10
+_CHARS_PER_TOKEN = 3.5
+# Local servers have no thinking cap of their own, so the pill's budget (or this
+# ceiling when there is none) is enforced here.
+_LOCAL_THINKING_HARD_CAP_TOKENS = 24000
+_THINKING_BUDGET_SLACK = 1.5
+
+
+def _local_thinking_cap(url: str, thinking_budget) -> Optional[int]:
+    """Most thinking tokens a self-hosted model may spend on one reply, else None."""
+    try:
+        if not (is_local_endpoint(url) or _is_self_hosted_openai_compatible(url)):
+            return None
+    except Exception:
+        return None
+    try:
+        budget = int(thinking_budget or 0)
+    except (TypeError, ValueError):
+        budget = 0
+    return int(budget * _THINKING_BUDGET_SLACK) if budget > 0 else _LOCAL_THINKING_HARD_CAP_TOKENS
 
 
 class _DegenerateStreamGuard:
     """Detect local-model token collapse before it floods the UI.
 
     Some self-hosted models fail by repeating one token forever ("Var Var Var",
-    "Summer Summer ..."). This is not a useful response and can burn context,
-    browser memory, and GPU time. Keep the guard conservative: only fire on long
-    same-token runs or a very dominant repeated token in the recent window.
+    "Summer Summer ..."), cycling through a few sentences, or reasoning without
+    end. None of that is a useful response and it burns context, memory, GPU
+    time and the user's patience. ``check`` looks for:
 
-    ``check(text, thinking=True)`` also looks for sentence-level loops in
-    reasoning text; ``thinking_loop`` is then set so the caller can retry without
-    thinking instead of just failing.
+    * a long run of one token, or one token dominating the recent window;
+    * one 4-word phrase repeated many times;
+    * a full window of sentences with very few different ones;
+    * text that compresses far better than any real writing (varied loops);
+    * reasoning that runs past its token ceiling.
+
+    ``check(text, thinking=True)`` marks reasoning text. A trip during thinking
+    sets ``thinking_loop`` so the caller can retry without thinking instead of
+    just failing; ``reason_kind`` says whether it was a loop or the ceiling.
     """
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, thinking_budget_tokens: Optional[int] = None):
         self.model = model or "model"
         self.last_token = ""
         self.same_run = 0
         self.recent_tokens: List[str] = []
         self.total_chars = 0
+        self.thinking_budget_tokens = thinking_budget_tokens
+        self.thinking_chars = 0
         self.thinking_loop = False
-        self._sentence_tail = ""
-        self._sentences: List[str] = []
+        self.reason_kind = ""  # "loop" | "budget"
+        self._streams = {
+            kind: {"tail": "", "new": 0, "sentence_tail": "", "sentences": []}
+            for kind in (True, False)
+        }
 
-    def _feed_sentences(self, text: str) -> None:
-        parts = _LOOP_SENTENCE_SPLIT_RE.split(self._sentence_tail + text)
-        self._sentence_tail = parts.pop()[-2000:]  # the unfinished sentence
+    def _feed_sentences(self, st: dict, text: str) -> None:
+        parts = _LOOP_SENTENCE_SPLIT_RE.split(st["sentence_tail"] + text)
+        st["sentence_tail"] = parts.pop()[-2000:]  # the unfinished sentence
         for part in parts:
             words = re.sub(r"[^a-z0-9' ]+", " ", part.lower()).split()
             if len(words) >= 2:
-                self._sentences.append(" ".join(words)[:100])
-        if len(self._sentences) > _LOOP_WINDOW:
-            del self._sentences[:-_LOOP_WINDOW]
+                st["sentences"].append(" ".join(words)[:100])
+        if len(st["sentences"]) > _LOOP_WINDOW:
+            del st["sentences"][:-_LOOP_WINDOW]
 
-    def _sentence_loop(self) -> Optional[str]:
-        if len(self._sentences) < _LOOP_WINDOW:
+    def _sentence_loop(self, st: dict, thinking: bool) -> Optional[str]:
+        sentences = st["sentences"]
+        if len(sentences) < _LOOP_WINDOW:
             return None
-        distinct = set(self._sentences)
-        if len(distinct) > _LOOP_MAX_DISTINCT:
+        distinct = set(sentences)
+        if len(distinct) > (_LOOP_MAX_DISTINCT if thinking else _LOOP_MAX_DISTINCT_ANSWER):
             return None
-        top = max(distinct, key=self._sentences.count)
+        top = max(distinct, key=sentences.count)
         return f"only {len(distinct)} different sentences in the last {_LOOP_WINDOW}, e.g. '{top[:40]}'"
 
-    def check(self, text: str, thinking: bool = False) -> Optional[str]:
-        if not text:
+    def _compression_loop(self, st: dict, thinking: bool) -> Optional[str]:
+        if len(st["tail"]) < _LOOP_COMPRESS_WINDOW or st["new"] < _LOOP_COMPRESS_EVERY:
             return None
-        self.total_chars += len(text)
-        if thinking:
-            # Before the token checks: a newline-only delta has no tokens but still
-            # ends a sentence.
-            self._feed_sentences(text)
+        st["new"] = 0
+        raw = st["tail"].encode("utf-8", "ignore")
+        ratio = len(zlib.compress(raw, 6)) / max(len(raw), 1)
+        if ratio < (_LOOP_COMPRESS_RATIO if thinking else _LOOP_COMPRESS_RATIO_ANSWER):
+            return f"the last {len(raw)} characters compress to {ratio:.0%}, which only repetition does"
+        return None
+
+    def _token_checks(self, text: str) -> Optional[str]:
         tokens = [t.lower() for t in _DEGENERATE_WORD_RE.findall(text) if len(t) >= 2]
         if not tokens:
             return None
@@ -450,15 +493,14 @@ class _DegenerateStreamGuard:
         if len(self.recent_tokens) > 96:
             self.recent_tokens = self.recent_tokens[-96:]
 
-        reason = None
         if self.same_run >= 28 and self.total_chars >= 100:
-            reason = f"repeated '{self.last_token}' {self.same_run} times"
-        elif len(self.recent_tokens) >= 72:
+            return f"repeated '{self.last_token}' {self.same_run} times"
+        if len(self.recent_tokens) >= 72:
             top = max(set(self.recent_tokens), key=self.recent_tokens.count)
             count = self.recent_tokens.count(top)
             if count >= 60 and count / max(len(self.recent_tokens), 1) >= 0.78:
-                reason = f"repeated '{top}' {count}/{len(self.recent_tokens)} recent tokens"
-        if not reason and len(self.recent_tokens) >= 80:
+                return f"repeated '{top}' {count}/{len(self.recent_tokens)} recent tokens"
+        if len(self.recent_tokens) >= 80:
             # Phrase loops are common on some local quantized MLX/MoE models:
             # "Also be a software developer mode?" repeated forever will not
             # trip the single-token guard above, but it is still a wedged
@@ -469,23 +511,48 @@ class _DegenerateStreamGuard:
                 top_gram = max(set(grams), key=grams.count)
                 gram_count = grams.count(top_gram)
                 if gram_count >= 10:
-                    reason = f"repeated phrase '{' '.join(top_gram)}' {gram_count} times"
-        if not reason and thinking:
-            reason = self._sentence_loop()
-            self.thinking_loop = bool(reason)
+                    return f"repeated phrase '{' '.join(top_gram)}' {gram_count} times"
+        return None
 
+    def check(self, text: str, thinking: bool = False) -> Optional[str]:
+        if not text:
+            return None
+        thinking = bool(thinking)
+        self.total_chars += len(text)
+        st = self._streams[thinking]
+        # Fed before any early return: a newline-only delta has no tokens but still
+        # ends a sentence.
+        self._feed_sentences(st, text)
+        st["tail"] = (st["tail"] + text)[-_LOOP_COMPRESS_WINDOW:]
+        st["new"] += len(text)
+        kind = "loop"
+        reason = self._token_checks(text)
+        if not reason:
+            reason = self._compression_loop(st, thinking) or self._sentence_loop(st, thinking)
+        if thinking:
+            self.thinking_chars += len(text)
+            cap = self.thinking_budget_tokens
+            if not reason and cap and self.thinking_chars / _CHARS_PER_TOKEN > cap:
+                reason, kind = f"thinking passed its limit of about {cap} tokens", "budget"
         if not reason:
             return None
 
+        self.thinking_loop = thinking
+        self.reason_kind = kind
         logger.warning("[degenerate-stream] aborting model=%s reason=%s", self.model, reason)
-        if self.thinking_loop:
+        if thinking and kind == "budget":
+            message = (
+                f"Stopped generation: {self.model} kept thinking without answering "
+                f"({reason}). Try again, or turn thinking off."
+            )
+        elif thinking:
             message = (
                 f"Stopped generation: {self.model} got stuck repeating itself while "
                 f"thinking ({reason}). Try again, or turn thinking off."
             )
         else:
             message = (
-                f"Stopped generation: {self.model} started repeating tokens "
+                f"Stopped generation: {self.model} started repeating itself "
                 f"({reason}). Try a different model or lower temperature."
             )
         return f'event: error\ndata: {json.dumps({"status": 502, "text": message, "error": message, "fallback_eligible": False})}\n\n'
@@ -2732,6 +2799,8 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
             model, messages_copy, temperature, max_tokens,
             stream=True, tools=tools, num_ctx=get_context_length(url, model),
         )
+        if _after_thinking_loop or (reasoning_effort and str(reasoning_effort).lower() == "none"):
+            payload["think"] = False
     elif provider == "chatgpt-subscription":
         target_url = _normalize_chatgpt_subscription_url(url)
         h = _provider_headers(provider, headers)
@@ -2761,13 +2830,16 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
             if _is_ollama_openai_compat_url(url) or _supports_thinking(model):
                 payload["think"] = True
         elif reasoning_effort and str(reasoning_effort).lower() == "none":
-            payload["reasoning_effort"] = "none"
+            payload["reasoning_effort"] = "low" if _is_harmony_model(model) else "none"  # gpt-oss cannot switch off
             if _is_ollama_openai_compat_url(url) or _supports_thinking(model):
                 payload["think"] = False
             if _supports_thinking(model) and _is_self_hosted_openai_compatible(url):
                 # llama.cpp / vLLM chat templates (Qwen3 family) read this flag;
                 # `think` above is Ollama's and means nothing to them.
                 payload["chat_template_kwargs"] = {"enable_thinking": False}
+        if _after_thinking_loop and _is_self_hosted_openai_compatible(url):
+            # Models with no thinking switch still get a nudge away from the loop.
+            payload.setdefault("presence_penalty", 1.0)
         elif provider == "mistral" and _supports_thinking(model):
             payload["reasoning_effort"] = _MISTRAL_REASONING_EFFORT
         elif _is_ollama_openai_compat_url(url) and _supports_thinking(model):
@@ -2791,7 +2863,41 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         yield f'event: error\ndata: {json.dumps({"error": f"Upstream {_host_key(target_url)} unreachable (cooldown active)", "status": 503})}\n\n'
         return
     note_model_activity(target_url, model)
-    degenerate_guard = _DegenerateStreamGuard(model)
+    degenerate_guard = _DegenerateStreamGuard(
+        model, thinking_budget_tokens=_local_thinking_cap(url, thinking_budget)
+    )
+    _loop_retry = False           # reasoning looped before any answer: retry without thinking
+
+    def _can_retry_thinking_loop(content_sent: bool) -> bool:
+        return degenerate_guard.thinking_loop and not _after_thinking_loop and not content_sent
+
+    async def _retry_without_thinking():
+        """Answer again with thinking off, after the looping request has been closed."""
+        if degenerate_guard.reason_kind == "budget":
+            notice = "\n\n[Thinking ran past its limit, so it was stopped. Answering without thinking.]\n"
+        else:
+            notice = "\n\n[The reasoning was repeating itself, so it was stopped. Answering without thinking.]\n"
+        yield _stream_delta_event(notice, thinking=True)
+        note = (
+            "Your previous reasoning repeated itself without reaching an answer. Do not "
+            "deliberate or restate your plan: answer now, directly and concisely, using "
+            "the information already in the conversation."
+        )
+        retry_messages = [dict(m) for m in messages]
+        for m in retry_messages:
+            if m.get("role") == "system" and isinstance(m.get("content"), str):
+                m["content"] = m["content"] + "\n\n" + note
+                break
+        else:
+            retry_messages.insert(0, {"role": "system", "content": note})
+        # The inner generator, not stream_llm: the caller already holds the model slot.
+        async for chunk in _stream_llm_inner(
+            url, model, retry_messages, temperature=temperature, max_tokens=max_tokens,
+            headers=headers, timeout=timeout, prompt_type=prompt_type, tools=tools,
+            session_id=session_id, tool_choice_none=tool_choice_none,
+            reasoning_effort="none", thinking_budget=thinking_budget, _after_thinking_loop=True,
+        ):
+            yield chunk
 
     # ── ChatGPT Subscription / Codex Responses streaming ──
     if provider == "chatgpt-subscription":
@@ -2921,6 +3027,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         _harmony_router = _HarmonyStreamRouter()
         _ollama_actual_model = ""
         _ollama_model_announced = False
+        _ollama_content_sent = False
         try:
             client = _get_http_client()
             async with client.stream('POST', target_url, json=payload, headers=h, timeout=stream_timeout) as r:
@@ -2954,11 +3061,29 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                     message = j.get("message") or {}
                     thinking = message.get("thinking") or ""
                     if thinking:
+                        _degenerate = degenerate_guard.check(thinking, thinking=True)
+                        if _degenerate:
+                            if _can_retry_thinking_loop(_ollama_content_sent):
+                                _loop_retry = True
+                                break  # closes this request before the retry opens
+                            yield _degenerate
+                            return
                         yield _stream_delta_event(thinking, thinking=True)
                     content = message.get("content") or ""
                     if content:
                         for part, is_thinking in _harmony_router.feed(content):
+                            _degenerate = degenerate_guard.check(part, thinking=is_thinking)
+                            if _degenerate:
+                                if is_thinking and _can_retry_thinking_loop(_ollama_content_sent):
+                                    _loop_retry = True
+                                    break
+                                yield _degenerate
+                                return
+                            if part and not is_thinking:
+                                _ollama_content_sent = True
                             yield _stream_delta_event(part, thinking=is_thinking)
+                        if _loop_retry:
+                            break
                     for tc in message.get("tool_calls") or []:
                         fn = tc.get("function") or {}
                         if fn.get("name"):
@@ -2986,9 +3111,10 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                                 yield f'data: {json.dumps({"type": "usage", "data": normalized_usage})}\n\n'
                         yield "data: [DONE]\n\n"
                         return
-                for part, is_thinking in _harmony_router.flush():
-                    yield _stream_delta_event(part, thinking=is_thinking)
-                yield "data: [DONE]\n\n"
+                if not _loop_retry:
+                    for part, is_thinking in _harmony_router.flush():
+                        yield _stream_delta_event(part, thinking=is_thinking)
+                    yield "data: [DONE]\n\n"
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             _cooled = _mark_host_dead(target_url)
             _tail = f" — host cooled for {DEAD_HOST_COOLDOWN:.0f}s" if _cooled else " — transient, will retry"
@@ -3007,6 +3133,11 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
         except Exception as e:
             logger.error(f"Ollama stream error: {e}")
             yield f'event: error\ndata: {json.dumps({"error": str(e), "status": 502, "fallback_eligible": False})}\n\n'
+            return
+        if _loop_retry:
+            logger.warning("[degenerate-stream] thinking loop on %s; retrying without thinking", model)
+            async for chunk in _retry_without_thinking():
+                yield chunk
         return
 
     # ── Anthropic streaming ──
@@ -3058,10 +3189,18 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                             if delta_type == "text_delta":
                                 text = delta.get("text") or ""
                                 if text:
+                                    _degenerate = degenerate_guard.check(text)
+                                    if _degenerate:
+                                        yield _degenerate
+                                        return
                                     yield f'data: {json.dumps({"delta": text})}\n\n'
                             elif delta_type == "thinking_delta":
                                 thinking_text = delta.get("thinking") or ""
                                 if thinking_text:
+                                    _degenerate = degenerate_guard.check(thinking_text, thinking=True)
+                                    if _degenerate:
+                                        yield _degenerate
+                                        return
                                     yield f'data: {json.dumps({"delta": thinking_text, "thinking": True})}\n\n'
                             elif delta_type == "input_json_delta":
                                 # Accumulate tool arguments JSON
@@ -3180,38 +3319,6 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
     _harmony_active = False       # sticky: gpt-oss harmony <|channel|> stream detected
     _actual_model = ""
     _actual_model_announced = False
-    _loop_retry = False           # reasoning looped before any answer: retry without thinking
-
-    def _can_retry_thinking_loop() -> bool:
-        return degenerate_guard.thinking_loop and not _after_thinking_loop and not _first_content_sent
-
-    async def _retry_without_thinking():
-        """Answer again with thinking off, after the looping request has been closed."""
-        yield _stream_delta_event(
-            "\n\n[The reasoning was repeating itself, so it was stopped. Answering without thinking.]\n",
-            thinking=True,
-        )
-        note = (
-            "Your previous reasoning repeated itself without reaching an answer. Do not "
-            "deliberate or restate your plan: answer now, directly and concisely, using "
-            "the information already in the conversation."
-        )
-        retry_messages = [dict(m) for m in messages]
-        for m in retry_messages:
-            if m.get("role") == "system" and isinstance(m.get("content"), str):
-                m["content"] = m["content"] + "\n\n" + note
-                break
-        else:
-            retry_messages.insert(0, {"role": "system", "content": note})
-        # The inner generator, not stream_llm: the caller already holds the model slot.
-        async for chunk in _stream_llm_inner(
-            url, model, retry_messages, temperature=temperature, max_tokens=max_tokens,
-            headers=headers, timeout=timeout, prompt_type=prompt_type, tools=tools,
-            session_id=session_id, tool_choice_none=tool_choice_none,
-            reasoning_effort="none", thinking_budget=thinking_budget, _after_thinking_loop=True,
-        ):
-            yield chunk
-
     def _emit_tool_calls():
         """Build the tool_calls event string if any were accumulated."""
         if not _tc_acc:
@@ -3351,7 +3458,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                                         if reasoning:
                                             _degenerate = degenerate_guard.check(reasoning, thinking=True)
                                             if _degenerate:
-                                                if _can_retry_thinking_loop():
+                                                if _can_retry_thinking_loop(_first_content_sent):
                                                     _loop_retry = True
                                                     break  # closes this request before the retry opens
                                                 yield _degenerate
@@ -3369,7 +3476,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
                                                 ),
                                             )
                                             if _degenerate:
-                                                if _can_retry_thinking_loop():
+                                                if _can_retry_thinking_loop(_first_content_sent):
                                                     _loop_retry = True
                                                     break
                                                 yield _degenerate

@@ -21,8 +21,10 @@ about 90% of RAM whatever the model's size, so a 4 GB model can still take
 the whole Mac down. Those loads are refused unless explicitly allowed.
 """
 
+import asyncio
 import logging
 import os
+import re
 import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -163,6 +165,10 @@ def hide_untagged_duplicates(
 
 def load_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Optional[str]:
     """Why loading ``model`` would take the Mac down, or None if it's safe."""
+    return _vllm_metal_block_reason(endpoint_url, model, timeout) or ram_block_reason(endpoint_url, model, timeout)
+
+
+def _vllm_metal_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Optional[str]:
     if not model or allow_vllm_metal():
         return None
     entries = _runner_models(endpoint_url, timeout)
@@ -182,6 +188,99 @@ def load_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Op
         "the Mac responsive. Use a GGUF build of the model instead, or set "
         "ODYSSEUS_ALLOW_VLLM_METAL=1 to load it anyway."
     )
+
+
+def ram_guard_enabled() -> bool:
+    return os.getenv("ODYSSEUS_RAM_GUARD", "true").lower() not in {"0", "false", "no", "off"}
+
+
+_SIZE_UNITS = {"kib": 1 / 2 ** 20, "mib": 1 / 2 ** 10, "gib": 1.0, "kb": 1e3 / 2 ** 30, "mb": 1e6 / 2 ** 30, "gb": 1e9 / 2 ** 30}
+
+
+def _weights_gb(entry: Optional[dict]) -> Optional[float]:
+    """Model file size in GiB from DMR's ``config.size`` ("14.29GiB", "4.28GB", "934.69MiB")."""
+    raw = str(((entry or {}).get("config") or {}).get("size") or "")
+    m = re.match(r"\s*([\d.]+)\s*([KMG]i?B)\s*$", raw, re.I)
+    return float(m.group(1)) * _SIZE_UNITS[m.group(2).lower()] if m else None
+
+
+def resident_models(endpoint_url: str, timeout: float = 3.0) -> Optional[List[str]]:
+    """Chat models currently in memory (embedding runners excluded), None if unknown."""
+    root = runner_root(endpoint_url)
+    try:
+        r = httpx.get(f"{root}/engines/ps", timeout=timeout)
+        data = r.json() if r.is_success else None
+    except Exception:
+        return None
+    if not isinstance(data, list):
+        return None
+    return [e["model_name"] for e in data if isinstance(e, dict) and e.get("model_name") and e.get("mode") != "embedding"]
+
+
+def ram_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Optional[str]:
+    """Refuse a load that clearly would not fit, instead of letting the Mac swap itself to a halt.
+
+    Only fires when the model is not already in memory. The weights (plus a little
+    for the KV cache) must fit in what is free now plus what unloading the other
+    resident models gives back, less a reserve for macOS and your apps.
+    """
+    if not model or not ram_guard_enabled():
+        return None
+    root = runner_root(endpoint_url)
+    if not root or not looks_like_dmr(endpoint_url) or not _maybe_dmr(root):
+        return None
+    entries = _runner_models(endpoint_url, timeout) or []
+    weights = _weights_gb(_model_entry(entries, model))
+    if weights is None:
+        return None
+    from src import memory_guard
+    snap = memory_guard.snapshot()
+    resident = resident_models(endpoint_url, timeout) if snap else None
+    if not snap or resident is None or model in resident:
+        return None
+    reclaim = sum(1.15 * (_weights_gb(_model_entry(entries, m)) or 0.0) for m in resident)
+    need = weights * 1.15 + 1.0
+    reserve = max(3.0, 0.06 * float(snap["total_gb"]))
+    spare = float(snap["available_gb"]) + reclaim - reserve
+    if snap["pressure"] >= 4:
+        return (
+            f"The Mac's memory pressure is critical right now, so {model} was not loaded. "
+            "Close some apps and try again."
+        )
+    if need > spare:
+        in_use = float(snap["used_gb"]) - reclaim
+        return (
+            f"{model} needs about {need:.0f} GB of memory, but only about {max(spare, 0):.0f} GB can be "
+            f"spared right now ({in_use:.0f} of {float(snap['total_gb']):.0f} GB are in use by other apps). "
+            "Loading it would push the Mac into swap and freeze it. Close some apps or pick a smaller "
+            "model, or set ODYSSEUS_RAM_GUARD=0 to load it anyway."
+        )
+    return None
+
+
+DEFAULT_ROOT = os.getenv("ODYSSEUS_DMR_URL", "http://127.0.0.1:12434")
+
+
+async def resident_models_default() -> List[str]:
+    return await asyncio.to_thread(resident_models, DEFAULT_ROOT) or []
+
+
+async def unload_all(endpoint_url: str = DEFAULT_ROOT) -> List[str]:
+    """Unload every chat model, ignoring the "unload others" opt-out: for emergencies.
+
+    Embedding runners stay (small). Never raises; returns the names unloaded.
+    """
+    root = runner_root(endpoint_url)
+    names = await asyncio.to_thread(resident_models, endpoint_url) or []
+    if not root or not names:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{root}/engines/unload", json={"models": names})
+            return names if r.is_success else []
+    except Exception as e:
+        logger.warning("[model-runner] emergency unload failed: %s", e)
+        return []
 
 
 def runner_context_size(endpoint_url: str, model: str, timeout: float = 3.0) -> Optional[int]:

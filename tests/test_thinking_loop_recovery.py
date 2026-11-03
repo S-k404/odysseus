@@ -38,14 +38,25 @@ def test_cycle_of_different_sentences_is_a_thinking_loop():
     assert "stuck repeating itself while thinking" in message and "turn thinking off" in message
 
 
-def test_same_text_is_left_alone_unless_it_is_reasoning():
+def test_the_same_loop_in_answer_text_is_stopped_but_not_retried():
     guard = llm_core._DegenerateStreamGuard("qwen3.6")
-    assert _feed(guard, "\n\n".join(LOOP * 30), thinking=False) is None
-    assert not guard.thinking_loop
+    hit = _feed(guard, "\n\n".join(LOOP * 30), thinking=False)
+
+    assert hit and not guard.thinking_loop  # nothing to retry once an answer has started
+    assert "started repeating itself" in json.loads(hit.split("data: ", 1)[1])["text"]
 
 
 @pytest.mark.parametrize("text", [
-    "\n".join(f"Step {i}: check whether item {i} matches the expected result." for i in range(80)),
+    "\n".join(
+        f"Now {w} the {n} part: it {v} the earlier {m}, so I keep it and move on to {k}."
+        for i, (w, n, v, m, k) in enumerate(zip(
+            ["check", "weigh", "compare", "recount", "test", "trace", "probe", "audit"] * 10,
+            ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"] * 8,
+            ["matches", "extends", "contradicts", "refines", "supports"] * 16,
+            ["estimate", "bound", "claim", "figure", "premise", "result", "sketch", "model"] * 10,
+            [f"case {j * 7 % 31}" for j in range(80)],
+        ))
+    ),
     "\n".join(f"- **File {i}**: description of file number {i}" for i in range(60)),
     "\n".join(["}"] * 40 + ["Wait."] * 40),                       # one-word lines carry no signal
     "\n".join("Let me double check that." if i % 5 == 0 else f"Option {i} changes section {i}." for i in range(60)),
@@ -190,3 +201,90 @@ def test_thinking_off_sets_the_template_flag_for_local_qwen3(monkeypatch):
 def test_thinking_off_flag_is_not_sent_elsewhere(monkeypatch, url, model):
     _, client = _run(monkeypatch, [_answer()], url=url, model=model, reasoning_effort="none")
     assert "chat_template_kwargs" not in client.payloads[0]
+
+
+# ── varied loops, ceilings, and the other provider paths ─────────────────────
+
+def test_loop_with_varying_details_is_caught_by_compression():
+    guard = llm_core._DegenerateStreamGuard("qwen3.6")
+    text = "".join(f"I'll mention `File{i}.dll`.\n\nI'll write the response.\n\nI'll be concise.\n\n" for i in range(80))
+    hit = _feed(guard, text)
+
+    assert hit and guard.thinking_loop and "compress" in json.loads(hit.split("data: ", 1)[1])["text"]
+
+
+@pytest.mark.parametrize("text", [
+    "\n".join(f"| row {i} | {i * 37 % 101} | {i * 91 % 211} | item-{i % 13} |" for i in range(120)),   # a table
+    "\n".join(f"user{i},{i * 7919 % 10007},{(i * 31) % 97}" for i in range(200)),                       # csv
+    json.dumps([{"id": i, "name": f"thing {i}", "score": i * 3 % 17} for i in range(80)], indent=2),     # json
+])
+def test_legitimately_repetitive_answers_are_not_flagged(text):
+    assert _feed(llm_core._DegenerateStreamGuard("qwen3.6"), text, thinking=False) is None
+
+
+def test_thinking_past_its_ceiling_is_cut_even_without_a_loop():
+    guard = llm_core._DegenerateStreamGuard("qwen3.6", thinking_budget_tokens=200)
+    words = [f"idea{i}" for i in range(400)]
+    hit = None
+    for i in range(0, len(words), 5):
+        hit = guard.check(f"Consider {words[i]} and {words[i + 1]} then {words[i + 2]}. ", thinking=True)
+        if hit:
+            break
+
+    assert hit and guard.thinking_loop and guard.reason_kind == "budget"
+    assert "limit of about 200 tokens" in hit
+
+
+def test_ceiling_comes_from_the_pill_budget_for_local_servers_only():
+    assert llm_core._local_thinking_cap(URL, 2048) == 3072
+    assert llm_core._local_thinking_cap(URL, 0) == llm_core._LOCAL_THINKING_HARD_CAP_TOKENS
+    assert llm_core._local_thinking_cap("https://api.openai.com/v1", 2048) is None
+
+
+def test_runaway_thinking_is_retried_without_thinking(monkeypatch):
+    lines = [_sse(reasoning_content=f"Consider angle number {i} of the question and its consequences. ") for i in range(3000)]
+    lines += ["data: [DONE]"]
+    blob, client = _run(monkeypatch, [lines, _answer()], thinking_budget=100)
+
+    assert "Thinking ran past its limit" in blob and "Here is the list." in blob
+    assert len(client.payloads) == 2 and client.payloads[1]["reasoning_effort"] == "none"
+
+
+def test_retry_nudges_models_that_have_no_thinking_switch(monkeypatch):
+    _, client = _run(monkeypatch, [_looping_reasoning(), _answer()])
+    assert client.payloads[1]["presence_penalty"] == 1.0
+    assert "presence_penalty" not in client.payloads[0]
+
+
+def test_gpt_oss_is_asked_for_low_effort_not_none(monkeypatch):
+    _, client = _run(monkeypatch, [_answer()], model="gpt-oss:20b", reasoning_effort="none")
+    assert client.payloads[0]["reasoning_effort"] == "low"
+
+
+# Ollama's native API streams newline-delimited JSON, not SSE.
+def _nd(thinking="", content="", done=False):
+    return json.dumps({"model": "qwen3:8b", "message": {"role": "assistant", "thinking": thinking, "content": content}, "done": done})
+
+
+def test_ollama_native_loop_is_cut_and_retried_with_think_off(monkeypatch):
+    looping = [_nd(thinking=s + "\n\n") for s in LOOP * 40]
+    blob, client = _run(monkeypatch, [looping, [_nd(content="Here is the list."), _nd(done=True)]],
+                        model="qwen3:8b", url="http://127.0.0.1:11434")
+
+    assert "Here is the list." in blob and "Answering without thinking" in blob
+    assert blob.count("data: [DONE]") == 1 and "event: error" not in blob
+    assert client.events == ["open 0", "close 0", "open 1", "close 1"]
+    assert "think" not in client.payloads[0] or client.payloads[0]["think"] is not False
+    assert client.payloads[1]["think"] is False
+
+
+def test_anthropic_loop_is_stopped_with_an_error(monkeypatch):
+    def evt(delta):
+        return "data: " + json.dumps({"type": "content_block_delta", "index": 0, "delta": delta})
+
+    lines = [evt({"type": "text_delta", "text": s + "\n\n"}) for s in LOOP * 40]
+    blob, client = _run(monkeypatch, [lines], model="claude-sonnet-4", url="https://api.anthropic.com/v1/messages",
+                        headers={"x-api-key": "k"})
+
+    assert "event: error" in blob and "started repeating itself" in blob
+    assert len(client.payloads) == 1

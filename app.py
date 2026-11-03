@@ -1051,6 +1051,13 @@ async def _startup_event():
         instance_lock.acquire()
         instance_lock.start_heartbeat()
     webhook_manager.set_loop(asyncio.get_running_loop())
+    # Unload local models if macOS memory pressure goes critical (a failed reply
+    # beats a frozen Mac). No-op off macOS.
+    from src import memory_guard, docker_model_runner as _dmr
+    if memory_guard.enabled():
+        app.state._memory_guard_task = asyncio.create_task(
+            memory_guard.watch(_dmr.unload_all, _dmr.resident_models_default)
+        )
     # Wipe any leftover incognito sessions from previous process — they're
     # ephemeral by design and must not survive a restart.
     try:
