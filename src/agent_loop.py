@@ -895,6 +895,24 @@ def _compact_tool_line(name: str, section: str) -> str:
     return f"- `{name}` — " + lines[0][:160]
 
 
+# Static on purpose: the system prompt is a KV-cache prefix for local backends.
+_MACOS_SHELL_RULES = """## Shell environment
+Shell commands run on this Mac (macOS / Darwin with the BSD userland), not on Linux. Always use macOS commands and flags:
+- `sed -i ''` (not `sed -i`), `grep -E` (no `grep -P`), `stat -f`, `date -v+1d` (not `date -d`), `shasum -a 256` / `md5` (not `sha256sum` / `md5sum`).
+- `ps aux`, `lsof -nP -iTCP:PORT -sTCP:LISTEN`, `top -l 1`, `vm_stat`, `sysctl`, `sw_vers` (no `ss`, `free`, `/proc`, `/etc/os-release`).
+- `open`, `pbcopy` / `pbpaste`, `brew` (no `apt` / `yum`), `launchctl` (no `systemctl` / `service`).
+- There is no `timeout` or `tac`; use `perl -e 'alarm N; exec @ARGV'` and `tail -r`.
+Commands run on a remote host over SSH follow that host's OS instead."""
+
+
+def _shell_platform_rules(included: set) -> str:
+    """macOS shell rules for the native Mac app; empty in Docker (Linux) or without a shell tool."""
+    import sys as _sys
+    if _sys.platform != "darwin" or not (included & {"bash", "manage_bg_jobs"}):
+        return ""
+    return _MACOS_SHELL_RULES
+
+
 def _assemble_prompt(tool_names: set, disabled_tools: set = None, compact: bool = False) -> str:
     """Build the system prompt with only the specified tools included."""
     disabled = disabled_tools or set()
@@ -912,8 +930,9 @@ def _assemble_prompt(tool_names: set, disabled_tools: set = None, compact: bool 
             "## Available tools\n" + ("\n".join(tool_lines) if tool_lines else "none"),
             _API_AGENT_RULES,
         ]
+        parts.append(_shell_platform_rules(included))
         parts.extend(_domain_rules_for_tools(included))
-        return "\n\n".join(parts)
+        return "\n\n".join(p for p in parts if p)
 
     parts = [_AGENT_PREAMBLE]
 
@@ -939,8 +958,9 @@ def _assemble_prompt(tool_names: set, disabled_tools: set = None, compact: bool 
         parts.append("## Additional tools\n" + "\n".join(one_liners))
 
     parts.append(_AGENT_RULES)
+    parts.append(_shell_platform_rules(included))
     parts.extend(_domain_rules_for_tools(included))
-    return "\n\n".join(parts)
+    return "\n\n".join(p for p in parts if p)
 
 
 # Legacy: full prompt with all tools (fallback when RAG unavailable)
