@@ -1345,6 +1345,25 @@ def test_api_picker_preserves_explicit_empty_selection():
     assert pinned == []
 
 
+def test_local_picker_hides_untagged_runner_duplicates(monkeypatch):
+    ep = _make_endpoint(
+        base_url="http://127.0.0.1:12434/engines/v1",
+        cached_models=json.dumps(["ai/qwen3:8B", "sha256:orig"]),
+    )
+    seen = {}
+
+    def fake_hide(url, ids, keep=None):
+        seen.update(url=url, ids=ids, keep=keep)
+        return [m for m in ids if not m.startswith("sha256:")]
+
+    monkeypatch.setattr(model_routes.docker_model_runner, "hide_untagged_duplicates", fake_hide)
+
+    models, _ = model_routes._picker_models_for_endpoint(ep, ep.base_url, ep.endpoint_kind)
+
+    assert models == ["ai/qwen3:8B"]
+    assert seen["url"] == ep.base_url and seen["ids"] == ["ai/qwen3:8B", "sha256:orig"]
+
+
 def test_list_api_endpoint_returns_pinned_picker_models(monkeypatch):
     ep = _make_endpoint(
         base_url="https://api.example.test/v1",

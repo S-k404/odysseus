@@ -464,7 +464,7 @@ function createThinkingSection(thinkingContent, index = 0, thinkingTime = null) 
     <div class="thinking-section">
       <div class="thinking-header" data-thinking-id="${id}">
         <div class="thinking-header-left">
-          <span>View thinking process</span>
+          <span>Thought process</span>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           ${timeHtml}
@@ -1044,8 +1044,10 @@ function _setThinkingExpanded(content, toggle, header, expanded) {
   toggle.classList.toggle('expanded', expanded);
   const label_el = header?.querySelector('.thinking-header-left span');
   if (label_el) {
-    const label = label_el.dataset.label || 'thinking process';
-    label_el.textContent = expanded ? `Hide ${label}` : `View ${label}`;
+    // Claude keeps "Thought process" fixed and lets the caret show the state;
+    // custom-labelled sections (research sources etc.) keep View/Hide.
+    const label = label_el.dataset.label;
+    label_el.textContent = !label ? 'Thought process' : (expanded ? `Hide ${label}` : `View ${label}`);
   }
 }
 

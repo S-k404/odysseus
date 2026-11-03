@@ -1,6 +1,7 @@
 # Odysseus Mac app: status and plans
 
-Last updated 2026-11-03. Goal: Odysseus on the Mac should look and feel like
+Last updated 2026-11-03. How to work on it safely, and where things live:
+`MAC_APP_HANDOFF.md`. Goal: Odysseus on the Mac should look and feel like
 Claude Desktop, run local models only, and never take the Mac down by loading
 too many models at once.
 
@@ -27,6 +28,19 @@ too many models at once.
     GitHub, Figma, Blender, Docker, n8n, Exa, Context7, DeepWiki, Hugging Face,
     filesystem, git, …).
 - Account menu: no placeholder plans or Learn items. Logout works.
+- Reply captions show just the model name. Docker reports the answering model as
+  a file path (`…/model.gguf`), which used to print as "model → model"; the
+  arrow now appears only when a different model really answered.
+- The thinking toggle reads "Thought process" and stays fixed; the caret shows
+  open or closed.
+- The chat model picker hides speech, embedding and image models (Kokoro,
+  Whisper, nomic-embed, stable-diffusion). They stay available in the voice,
+  memory and image settings.
+- The picker no longer lists the untagged `sha256:…` copies that
+  `docker model package` leaves behind. One is hidden only when a tagged model in
+  the list has the same weights (`hide_untagged_duplicates` in
+  `src/docker_model_runner.py`); an untagged model with no tagged twin, or one
+  you pinned, still shows. Settings still lists everything.
 
 **Mac app wrapper** (`swift/OdysseusApp.swift`)
 - Handles JS dialogs, file pickers, downloads, external links and reopening
@@ -97,11 +111,7 @@ hosts, and the model runner guard and unload.
 - ChromaDB, SearXNG and Speaches only run inside the Docker stack. While Docker
   is off, the Mac app has no vector memory or document search, no SearXNG web
   search, and no TTS/STT.
-- The chat model picker still lists non-chat models: Kokoro, Whisper,
-  nomic-embed and stable-diffusion.
 - "Projects" opens a new-project prompt rather than a projects page.
-- Reply captions read "model → model", and the thinking label says "View
-  thinking process" (Claude says "Thought process").
 - Ollama models are not unloaded on switch. They unload themselves after 5
   minutes idle, and the 1.5B model is about 1 GB.
 - Branch history: this work is 509 commits behind upstream
@@ -118,13 +128,10 @@ hosts, and the model runner guard and unload.
 2. **Restart and check.** After relaunching, confirm memory and RAG connect, and
    see the startup error screen once by starting the app while the Docker copy
    runs.
-3. **Picker cleanup.** Hide embedding, TTS, STT and image models from the chat
-   model list. Keep them where they are used (voice, images, embeddings).
-4. **Claude parity polish.** Projects page; "Thought process" label; drop the
-   "→ model" suffix; check the light theme too.
-5. **Merge upstream.** Bring in the 509 upstream commits on a separate branch,
+3. **Claude parity polish.** A Projects page, and check the light theme.
+4. **Merge upstream.** Bring in the 509 upstream commits on a separate branch,
    resolve conflicts, and rerun the full suite.
-6. **RAM headroom.** If the Mac still feels tight, package qwen3.6-35b at 64k
+5. **RAM headroom.** If the Mac still feels tight, package qwen3.6-35b at 64k
    context (`docker model package --from … --context-size 65536`), which
    costs less RAM than 128k. Optionally add Ollama unload (`keep_alive: 0`).
-7. **Review the other agents' MCP servers** and remove the stubs or duplicates.
+6. **Review the other agents' MCP servers** and remove the stubs or duplicates.

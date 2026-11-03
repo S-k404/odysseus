@@ -613,10 +613,21 @@ function modelValue(name) {
   return String(name).trim();
 }
 
+// Docker Model Runner reports the answering model as a file path, a bare
+// "model.gguf" or a sha256 id. None of those is a name worth showing, so they
+// count as "the model that was asked for".
+export function isRunnerAlias(name) {
+  const v = modelValue(name);
+  if (!v) return false;
+  if (/\/\.docker\/models\//.test(v) || /^sha256:[0-9a-f]+$/i.test(v)) return true;
+  return /^model(-\d+-of-\d+)?(\.gguf|\.safetensors)?$/i.test(v.split('/').pop());
+}
+
 export function sameModelName(left, right) {
   const a = modelValue(left);
   const b = modelValue(right);
   if (!a || !b) return false;
+  if (isRunnerAlias(a) || isRunnerAlias(b)) return true;
   return a.toLowerCase() === b.toLowerCase()
     || shortModel(a).toLowerCase() === shortModel(b).toLowerCase();
 }
@@ -636,7 +647,7 @@ export function modelRouteLabel(
   actualEndpointId = '',
 ) {
   const requested = modelValue(requestedModel);
-  const actual = modelValue(actualModel) || requested;
+  const actual = isRunnerAlias(actualModel) ? requested : (modelValue(actualModel) || requested);
   const requestedRoute = modelValue(requestedEndpointId || requestedEndpointLabel);
   const actualRoute = modelValue(actualEndpointId || actualEndpointLabel);
   const routeChanged = Boolean(
@@ -659,7 +670,8 @@ export function replyModelPair(modelName, metadata) {
   const actualFromMeta = modelValue(meta.model || meta.actual_model);
   const requestedFromMeta = modelValue(meta.requested_model || meta.selected_model);
   if (actualFromMeta || requestedFromMeta) {
-    const actual = actualFromMeta || requestedFromMeta || modelValue(modelName);
+    const named = isRunnerAlias(actualFromMeta) ? '' : actualFromMeta;
+    const actual = named || requestedFromMeta || modelValue(modelName);
     const requested = requestedFromMeta || actual;
     return {
       requestedModel: requested,
@@ -3114,6 +3126,7 @@ export function addMessage(role, content, modelName, metadata) {
 const chatRenderer = {
   shortModel,
   sameModelName,
+  isRunnerAlias,
   modelRouteLabel,
   replyModelPair,
   modelColor,

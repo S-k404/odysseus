@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from core.database import SessionLocal, ModelEndpoint, Session as DbSession
 from core.log_safety import redact_url as _redact_url_for_log
 from core.middleware import require_admin
+from src import docker_model_runner
 from src.constants import COOKBOOK_STATE_FILE
 from src.llm_core import _detect_provider, _host_match, ANTHROPIC_MODELS
 from src.tls_overrides import llm_verify
@@ -1360,11 +1361,12 @@ def _picker_models_for_endpoint(ep, base_url: str, kind: str):
         if not _has_explicit_pinned_models(ep):
             pinned = _legacy_visible_api_models(ep)
         return pinned, pinned
-    return _visible_models(
+    visible = _visible_models(
         _cached_model_ids(ep),
         getattr(ep, "hidden_models", None),
         pinned,
-    ), pinned
+    )
+    return docker_model_runner.hide_untagged_duplicates(base_url, visible, keep=pinned), pinned
 
 
 def _api_key_fingerprint(api_key: Optional[str]) -> str:

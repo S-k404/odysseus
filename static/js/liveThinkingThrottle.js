@@ -34,7 +34,7 @@ const REPLY_PREFIX_SOURCE = "(?:Hey|Hi |Hi!|Hello|Sure|Yes|No |No,|Yo|OK|Here|Ab
 const REPLY_LINE_RE = new RegExp('(?:^|\\n)\\s*' + REPLY_PREFIX_SOURCE, 'gi');
 const REPLY_INLINE_RE = new RegExp('[.!?]\\s*' + REPLY_PREFIX_SOURCE, 'gi');
 const REASONING_PREFIX_CANDIDATES = [
-  'thinking', 'thinking:', 'thinking process', 'thinking process:', 'view thinking', 'iew thinking',
+  'thinking', 'thinking:', 'thinking process', 'thinking process:', 'view thinking', 'iew thinking', 'thought process', 'thought process:',
   'thought', 'thought:', 'reasoning', 'reasoning:', 'reflection', 'scratchpad', 'plan:',
   'the user ', 'user wants', 'user asks', 'we need ', 'i need ', 'i should ', 'i will ', "i'll ",
   'i am going ', 'let me think', 'let me look', 'let me see', 'let me check', 'let me read',

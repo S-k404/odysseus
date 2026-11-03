@@ -31,3 +31,13 @@ export function compareModelObjects(a, b) {
 export function sortModelObjects(models) {
   return _arrayOrEmpty(models).slice().sort(compareModelObjects);
 }
+
+// Speech, embedding and image models can't answer a chat message. Judged by the
+// last path segment so "speaches-ai/Kokoro-82M-v1.0-ONNX" and "ai/stable-diffusion"
+// are caught; the server keeps them for the voice, memory and image settings.
+const _NON_CHAT_LEAF = /(^|[-_.])(whisper|kokoro|tts|stt|embed|embedding|embeddings|rerank|reranker|stable-diffusion|sdxl|flux|dall-e)([-_.:\d]|$)|^(text-embedding|gpt-image|chatgpt-image)/i;
+
+export function isNonChatModelId(modelId) {
+  const leaf = String(modelId || '').split('/').pop().trim();
+  return !!leaf && _NON_CHAT_LEAF.test(leaf);
+}
