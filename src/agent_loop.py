@@ -4019,12 +4019,16 @@ async def stream_agent_loop(
     # Fallback: if RAG unavailable, use keyword-based tool selection
     # instead of sending ALL tools (which overwhelms the model).
     if not guide_only and not _relevant_tools and _retrieval_query:
-        from src.tool_index import ALWAYS_AVAILABLE, ToolIndex
+        from src.tool_index import ALWAYS_AVAILABLE, ToolIndex, keyword_mcp_tools
         _relevant_tools = set(ALWAYS_AVAILABLE)
         ql = _retrieval_query.lower()
         for keywords, tools in ToolIndex._KEYWORD_HINTS.items():
             if any(kw in ql for kw in keywords):
                 _relevant_tools.update(tools)
+        # The hints above name built-in tools only; without the index no MCP
+        # tool would ever be offered, so match those by words in the query.
+        if mcp_mgr:
+            _relevant_tools.update(keyword_mcp_tools(_retrieval_query, mcp_mgr, _mcp_disabled_map))
         logger.info(f"[tool-rag] Keyword fallback selected: {sorted(_relevant_tools - ALWAYS_AVAILABLE)}")
 
     # If deterministic domain detection fired, seed the corresponding domain
