@@ -41,8 +41,12 @@ too many models at once.
   and the composer drops the Agent|Chat toggle and the Thinking/Context pills.
   The hiding had removed the only UI way in. `isImageModelId` (modelSort.js)
   mirrors `src/image_model_ids.py`; a test keeps them in step. Checked in
-  headless Chrome against the scratch server with the fake runner; a live
-  Stable Diffusion run through the UI has not been tried (it needs ~20 GB free).
+  headless Chrome against the scratch server with the fake runner, then live
+  (2026-11-03): picking stable-diffusion and sending a prompt gave a correct
+  512x512 image in 20 s (model load included) and a gallery row. A fresh scratch
+  server needs `image_gen_enabled`, `image_model` and `image_quality` in its
+  settings.json first (default off). Stable Diffusion held about 11 GB after
+  that run and about 20 GB after a longer session with larger images.
   The chat route generates at a fixed 512x512.
 - Light mode: a built-in **claude-light** theme (Settings → Appearance) with
   Claude Desktop's cream page, darker sidebar, white composer and terracotta
