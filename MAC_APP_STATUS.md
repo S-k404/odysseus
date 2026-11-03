@@ -33,9 +33,17 @@ too many models at once.
   arrow now appears only when a different model really answered.
 - The thinking toggle reads "Thought process" and stays fixed; the caret shows
   open or closed.
-- The chat model picker hides speech, embedding and image models (Kokoro,
-  Whisper, nomic-embed, stable-diffusion). They stay available in the voice,
-  memory and image settings.
+- The chat model picker hides speech and embedding models (Kokoro, Whisper,
+  nomic-embed). They stay available in the voice and memory settings.
+- Image generation is in the picker again, under its own "Image generation"
+  heading (stable-diffusion, gpt-image, flux...). A chat on one of those models
+  generates an image (or edits an attached one; the server routes by model id)
+  and the composer drops the Agent|Chat toggle and the Thinking/Context pills.
+  The hiding had removed the only UI way in. `isImageModelId` (modelSort.js)
+  mirrors `src/image_model_ids.py`; a test keeps them in step. Checked in
+  headless Chrome against the scratch server with the fake runner; a live
+  Stable Diffusion run through the UI has not been tried (it needs ~20 GB free).
+  The chat route generates at a fixed 512x512.
 - Light mode: a built-in **claude-light** theme (Settings → Appearance) with
   Claude Desktop's cream page, darker sidebar, white composer and terracotta
   accent. Checked in headless Chrome against the scratch server: welcome, chat

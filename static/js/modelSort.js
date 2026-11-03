@@ -41,3 +41,14 @@ export function isNonChatModelId(modelId) {
   const leaf = String(modelId || '').split('/').pop().trim();
   return !!leaf && _NON_CHAT_LEAF.test(leaf);
 }
+
+// Models the server answers with an image instead of text: a chat session on one
+// of these generates (or, with an attached picture, edits). Keep in step with
+// src/image_model_ids.py, which makes that call; the picker lists these in their
+// own "Image generation" section and the composer switches to image mode.
+const _IMAGE_MODEL_PREFIX = /^(gpt-image|dall-e|chatgpt-image|hidream|qwen-image|z-image|flux|stable-diffusion|sdxl|boogu|krea-2)|^gpt-.*-image/;
+
+export function isImageModelId(modelId) {
+  const leaf = String(modelId || '').split('/').pop().trim().toLowerCase();
+  return !!leaf && _IMAGE_MODEL_PREFIX.test(leaf);
+}
