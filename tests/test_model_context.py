@@ -312,3 +312,11 @@ class TestGetContextLength:
 
         endpoint = "http://100.117.136.97:34521/v1/chat/completions"
         assert model_context.get_context_length(endpoint, "unknown-proxy-model") == model_context.DEFAULT_CONTEXT
+
+    def test_dmr_catalog_entry_context_window(self):
+        # Docker Desktop Model Runner reports context_window inside a "dmr" dictionary
+        entry = {
+            "id": "huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S",
+            "dmr": {"context_window": 16384, "architecture": "qwen35moe"},
+        }
+        assert model_context._model_ctx_from_entry(entry) == 16384

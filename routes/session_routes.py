@@ -366,6 +366,7 @@ def setup_session_routes(
         skip_validation: str = Form(None),
         api_key: str = Form(""),
         endpoint_id: str = Form(""),
+        folder: str = Form(None),
     ):
         skip_val = str(skip_validation).lower() == "true"
         user = effective_user(request)
@@ -485,12 +486,26 @@ def setup_session_routes(
         # Fire event for automation tasks
         from src.event_bus import fire_event
         fire_event("session_created", user)
+        # Persist folder / project assignment if specified
+        assigned_folder = None
+        if folder and folder.strip():
+            assigned_folder = folder.strip()
+            _db_fold = SessionLocal()
+            try:
+                db_session = _db_fold.query(DbSession).filter(DbSession.id == sid).first()
+                if db_session:
+                    db_session.folder = assigned_folder
+                    db_session.updated_at = utcnow_naive()
+                    _db_fold.commit()
+            finally:
+                _db_fold.close()
         return SessionResponse(
             id=sid,
             name=session.name,
             model=model_to_use,
             rag=str(rag).lower() == "true" if rag else False,
-            archived=False
+            archived=False,
+            folder=assigned_folder,
         )    
     @router.patch("/session/{sid}")
     def rename_session(
@@ -908,23 +923,89 @@ def setup_session_routes(
                 headers={"Content-Disposition": f"attachment; filename={out_name}"},
             )
 
-        # Default: markdown
-        markdown_lines = []
-        markdown_lines.append(f"# Conversation: {session.name}")
-        markdown_lines.append(f"*Exported on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
-        markdown_lines.append(f"*Model: {session.model}*")
-        markdown_lines.append("\n---\n")
+        # Default: Claude-style structured markdown
+        is_project = bool(session.folder and session.folder.strip())
+        project_name = session.folder.strip() if is_project else None
+        export_type = "project_work" if is_project else "one_time_chat"
+
+        total_input_tokens = getattr(session, "total_input_tokens", 0) or 0
+        total_output_tokens = getattr(session, "total_output_tokens", 0) or 0
+
+        markdown_lines = [
+            "---",
+            f'title: "{session.name}"',
+            f'type: "{export_type}"',
+            f'project: "{project_name or "none"}"',
+            f'model: "{session.model}"',
+            f'exported_at: "{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"',
+            f'total_messages: {len(session.history)}',
+            f'total_tokens: {total_input_tokens + total_output_tokens}',
+            "tags:",
+            "  - odysseus",
+            f"  - {export_type}",
+            "---",
+            "",
+            f"# {session.name}",
+            "",
+            f"> 🏷️ **Type**: `{export_type.replace('_', ' ').title()}` | 🤖 **Model**: `{session.model}` | 📅 **Exported**: `{datetime.now().strftime('%Y-%m-%d %H:%M')}`",
+            "",
+            "---",
+            "",
+        ]
+
         for message in session.history:
-            role = message.role.upper()
-            content = _content_to_text(message.content)
-            markdown_lines.append(f"### {role}")
-            markdown_lines.append(f"{content}\n")
-            markdown_lines.append("---\n")
-        if len(markdown_lines) > 3:
+            role = (message.role or "unknown").lower()
+            content = _content_to_text(message.content).strip()
+            meta = _message_metadata(message)
+
+            if role == "user":
+                markdown_lines.append(f"### 👤 User\n")
+                markdown_lines.append(f"{content}\n")
+                markdown_lines.append("---\n")
+            elif role == "assistant":
+                markdown_lines.append(f"### 🤖 Assistant (`{session.model}`)\n")
+                # Format thinking if present in metadata
+                thinking = meta.get("thinking") or meta.get("reasoning") or ""
+                if thinking and str(thinking).strip():
+                    markdown_lines.append("<details>\n<summary>🧠 <em>Thought Process</em></summary>\n\n")
+                    markdown_lines.append(str(thinking).strip())
+                    markdown_lines.append("\n\n</details>\n")
+
+                # Format tool calls if present
+                tool_calls = meta.get("tool_calls") or []
+                if tool_calls and isinstance(tool_calls, list):
+                    markdown_lines.append("<details>\n<summary>🔧 <em>Tool Invocations</em></summary>\n\n```json\n")
+                    markdown_lines.append(json.dumps(tool_calls, indent=2))
+                    markdown_lines.append("\n```\n\n</details>\n")
+
+                markdown_lines.append(f"{content}\n")
+                markdown_lines.append("---\n")
+            else:
+                markdown_lines.append(f"### ⚙️ {role.title()}\n")
+                markdown_lines.append(f"{content}\n")
+                markdown_lines.append("---\n")
+
+        if markdown_lines and markdown_lines[-1] == "---\n":
             markdown_lines.pop()
-        out_name = filename or f"conversation_{safe_name}_{timestamp}.md"
+
+        full_md_content = "\n".join(markdown_lines)
+        out_name = filename or f"{safe_name}_{timestamp}.md"
+
+        # Separate project work vs one-time chats in the workspace filesystem
+        try:
+            ws_root = Path(os.environ.get("ODYSSEUS_REPO_DIR", "/Users/shamit/Documents/Docker/Odysseus")) / "workspace"
+            if is_project and project_name:
+                p_safe = re.sub(r"[^\w\-.]", "_", project_name.lower())
+                save_dir = ws_root / "projects" / p_safe / "docs"
+            else:
+                save_dir = ws_root / "chats"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            (save_dir / out_name).write_text(full_md_content, encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Could not write copy to workspace: {e}")
+
         return Response(
-            content="\n".join(markdown_lines),
+            content=full_md_content,
             media_type="text/markdown",
             headers={"Content-Disposition": f"attachment; filename={out_name}"},
         )

@@ -7,6 +7,11 @@ services:
   odysseus:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./src:/app/src:ro
+      - ./docker/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./mcp_servers:/app/mcp_servers:ro
     group_add: ["${DOCKER_GID:-963}"]
     environment:
       - ODYSSEUS_ENABLE_HOST_DOCKER=true
+      - ONSHAPE_ACCESS_KEY=${ONSHAPE_ACCESS_KEY:-}
+      - ONSHAPE_SECRET_KEY=${ONSHAPE_SECRET_KEY:-}

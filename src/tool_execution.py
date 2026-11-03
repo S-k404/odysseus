@@ -526,8 +526,13 @@ def _resolve_search_root(raw_path: str) -> str:
         # bare ls listed whatever the workspace was bound to.
         return _resolve_tool_path_in_workspace(ws, raw or ws)
     if not raw:
+        configured = str(AGENT_WORKSPACE_DIR or "").strip()
+        # "" and "." make the default root the process cwd (the app checkout
+        # itself), which a broad tool_path_extra_roots entry can allow.
+        if not configured or os.path.normpath(configured) == ".":
+            raise ValueError("default agent workspace is not a safe readable data subdirectory")
         roots = _tool_path_roots()
-        default_root = os.path.realpath(AGENT_WORKSPACE_DIR)
+        default_root = os.path.realpath(configured)
         if default_root in roots and not _is_denied_tool_path(default_root):
             return default_root
         raise ValueError("default agent workspace is not a safe readable data subdirectory")

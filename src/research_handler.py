@@ -159,7 +159,7 @@ class ResearchHandler:
                 temperature=0.1,
                 max_tokens=200,
                 headers=llm_headers,
-                timeout=15,
+                timeout=60,
                 max_retries=1,
             )
             query = strip_thinking(response).strip().strip('"\'')

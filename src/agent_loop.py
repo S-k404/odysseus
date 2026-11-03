@@ -523,6 +523,40 @@ _DOMAIN_RULES = {
 ## Integration/API rules
 - To query or control a configured service integration (Home Assistant, Miniflux, Gitea, Linkding, Jellyfin, or any other registered service), use `api_call` with the integration name, HTTP method, path, and optional JSON body.
 - Do not use shell, curl, or `app_api` to reach a user's connected integration when `api_call` is available.""",
+    "notion": """\
+## Notion rules
+- Use `manage_notion` (mcp__notion__manage_notion) for every Notion request: search, read, query, ping. It is live and read-only; nothing is written to Notion or saved to disk.
+- Search matches page/database TITLES only, not body text. Read the best hits and follow id= values for sub-pages and inline databases.
+- Only pages shared with the integration are visible; a 404 or empty result usually means "not shared", not "does not exist".
+- Do not use web_search, web_fetch, the browser, or shell to reach Notion when `manage_notion` is available.""",
+    "obsidian": """\
+## Obsidian rules
+- Use the built-in Obsidian tool for vault search/read/write requests instead of shelling out to the filesystem.
+- Confirm the configured vault path with the tool itself if a note can't be found rather than guessing paths.""",
+    "blender": """\
+## Blender 3D rules
+- Use Blender tools to inspect 3D scenes, execute Python automation scripts via `bpy`, get object summaries, and render viewport/thumbnails.""",
+    "pubmed": """\
+## PubMed Biomedical Research rules
+- Use PubMed tools to search biomedical, clinical, and life science publications, and retrieve abstracts and metadata using PMIDs.""",
+    "github": """\
+## GitHub rules
+- Use GitHub tools to search repositories, inspect file contents, and list issues or PRs.""",
+    "coursera": """\
+## Coursera rules
+- Use Coursera tools to search courses, specializations, degrees, and inspect syllabus content.""",
+    "canva": """\
+## Canva Design rules
+- Use Canva tools to look up design dimensions, format specs, generate harmonic color palettes, and plan graphic layouts.""",
+    "figma": """\
+## Figma rules
+- Use Figma tools to inspect files, frames, and extract structured design tokens and components.""",
+    "cloudflare": """\
+## Cloudflare rules
+- Use Cloudflare tools to list Workers scripts, deployments, and query DNS records.""",
+    "gdrive": """\
+## Google Drive rules
+- Use Google Drive tools to search cloud documents, spreadsheets, presentations, and inspect file metadata.""",
 }
 
 _DOMAIN_TOOL_MAP = {
@@ -537,11 +571,30 @@ _DOMAIN_TOOL_MAP = {
     "settings": {"manage_settings", "manage_endpoints", "manage_mcp", "manage_webhooks", "manage_tokens", "app_api"},
     "contacts": {"resolve_contact", "manage_contact"},
     "integrations": {"api_call"},
+    # Built-in read-only knowledge-source & connector MCP tools
+    "notion": {"mcp__notion__manage_notion"},
+    "obsidian": {"mcp__obsidian__manage_obsidian"},
+    "blender": {"mcp__blender__blender_get_info", "mcp__blender__blender_execute_code", "mcp__blender__blender_get_scene_summary", "mcp__blender__blender_render_thumbnail"},
+    "pubmed": {"mcp__pubmed__pubmed_search", "mcp__pubmed__pubmed_get_abstract"},
+    "github": {"mcp__github__github_search_repos", "mcp__github__github_get_file_contents", "mcp__github__github_list_issues"},
+    "coursera": {"mcp__coursera__coursera_search_courses", "mcp__coursera__coursera_get_course_details"},
+    "canva": {"mcp__canva__canva_get_format_specs", "mcp__canva__canva_generate_color_palette", "mcp__canva__canva_suggest_layout"},
+    "figma": {"mcp__figma__figma_get_file_info", "mcp__figma__figma_extract_design_tokens"},
+    "cloudflare": {"mcp__cloudflare__cloudflare_list_workers", "mcp__cloudflare__cloudflare_dns_lookup"},
+    "gdrive": {"mcp__gdrive__gdrive_search_files", "mcp__gdrive__gdrive_read_file_metadata"},
 }
 
 _WORKSPACE_TERMINUS_TOOLS = (
     _DOMAIN_TOOL_MAP["files"]
     | {"manage_skills", "ask_teacher", "web_search", "web_fetch", "ask_user", "update_plan"}
+)
+
+_TERMINUS_PRESERVED_DOMAINS = (
+    "documents", "email", "notes_calendar_tasks", "ui", "sessions",
+    "notion", "obsidian", "blender", "pubmed", "github", "coursera", "canva", "figma", "cloudflare", "gdrive"
+)
+_TERMINUS_PRESERVED_TOOLS = set().union(
+    *(_DOMAIN_TOOL_MAP[_d] for _d in _TERMINUS_PRESERVED_DOMAINS)
 )
 
 def _domain_rules_for_tools(tool_names: set) -> list[str]:
@@ -914,8 +967,17 @@ _API_HOSTS = frozenset([
     "ollama.com", "api.venice.ai", "api.kimi.com",
     "api.githubcopilot.com",
 ])
-_MCP_KEYWORDS = frozenset(["mcp", "browse", "browser", "website", "calendar", "event", "email",
-                           "gmail", "screenshot", "navigate", "click", "miniflux", "rss", "feed"])
+_MCP_KEYWORDS = frozenset([
+    "mcp", "browse", "browser", "website", "calendar", "event", "email",
+    "gmail", "screenshot", "navigate", "click", "miniflux", "rss", "feed",
+    "blender", "3d", "render", "mesh", "pubmed", "pmid", "biomedical",
+    "github", "repo", "git", "coursera", "course", "syllabus",
+    "canva", "palette", "figma", "design token", "cloudflare", "worker", "dns",
+    "gdrive", "google drive", "google docs", "kicad", "pcb", "schematic",
+    "arxiv", "sqlite", "table", "sql", "notion", "obsidian",
+    "attendance", "schedule", "auerp", "microproject", "bom", "parts", "component", "verification",
+    "cad", "dxf", "dwg", "cadcraft", "enclosure", "standoff", "stl", "scad", "openscad", "gerber", "cpl", "drc", "layout", "circuit",
+])
 _ADMIN_SCHEMA_NAMES = frozenset([
     "manage_session", "manage_skills", "manage_tasks",
     "manage_endpoints", "manage_mcp", "manage_webhooks", "manage_tokens",
@@ -1477,6 +1539,18 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
     if has(r"\bapi[ _]call\b", r"\bintegrations?\b",
            r"\b(?:home ?assistant|miniflux|gitea|linkding|jellyfin)\b"):
         domains.add("integrations")
+    # Named built-in read-only knowledge sources (Notion, Obsidian): naming
+    # one alone ("check notion project HQ") matches no other domain, so with
+    # an active workspace the low-signal short-circuit below served only
+    # file tools and skipped RAG retrieval entirely -- the model then had no
+    # way to reach the real tool and looped calling web_search to try to look
+    # it up by name instead. Same fix shape as the #3794 api_call case above:
+    # seed the actual built-in tool deterministically, independent of
+    # embedding retrieval.
+    if has(r"\bnotion\b"):
+        domains.add("notion")
+    if has(r"\bobsidian\b"):
+        domains.add("obsidian")
 
     low_signal = not continuation and not domains
     return {
@@ -2744,7 +2818,11 @@ def _build_system_prompt(
     # MCP tool descriptions — sourced from external servers, must not be in system role.
     if mcp_mgr:
         try:
-            _mcp_desc = mcp_mgr.get_tool_descriptions_for_prompt(mcp_disabled_map or {})
+            _mcp_desc = mcp_mgr.get_tool_descriptions_for_prompt(
+                mcp_disabled_map or {},
+                relevant_tools=relevant_tools,
+                max_per_server=15 if relevant_tools is None else None,
+            )
             if _mcp_desc:
                 _mcp_desc_message = untrusted_context_message(
                     "MCP tools",
@@ -3449,6 +3527,8 @@ async def stream_agent_loop(
     _is_teacher_run: bool = False,
     history_session=None,
     defer_context_shaping: bool = False,
+    reasoning_effort: Optional[str] = None,
+    thinking_budget: Optional[int] = None,
 ) -> AsyncGenerator[str, None]:
     """Streaming agent loop generator.
 
@@ -3701,6 +3781,8 @@ async def stream_agent_loop(
                 fallback_on_empty=fallback_on_empty,
                 candidate_request_factory=_direct_candidate_request,
                 candidate_route_descriptors=route_descriptors,
+                reasoning_effort=reasoning_effort,
+                thinking_budget=thinking_budget,
             ):
                 if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                     try:
@@ -3985,8 +4067,15 @@ async def stream_agent_loop(
             and not _active_document_relevant
             and not active_email
         ):
-            _relevant_tools = set(_WORKSPACE_TERMINUS_TOOLS)
-            logger.info("[tool-rag] Workspace file/terminal request; using Odysseus Terminus toolset")
+            _preserved = _relevant_tools & _TERMINUS_PRESERVED_TOOLS
+            _relevant_tools = set(_WORKSPACE_TERMINUS_TOOLS) | _preserved
+            if _preserved:
+                logger.info(
+                    "[tool-rag] Workspace file/terminal request; using Odysseus Terminus toolset "
+                    "(preserved explicitly-requested tools=%s)", sorted(_preserved),
+                )
+            else:
+                logger.info("[tool-rag] Workspace file/terminal request; using Odysseus Terminus toolset")
 
     # If this turn targets the open document, keep editing tools available
     # regardless of which selection path (RAG, keyword, caller-provided) ran.
@@ -4239,6 +4328,8 @@ async def stream_agent_loop(
                 hard_max = DEFAULT_HARD_MAX
             if hard_max <= 0:
                 hard_max = DEFAULT_HARD_MAX
+            if context_length and context_length > hard_max:
+                hard_max = context_length
             budget_is_explicit = _budget_is_explicit(soft_budget)
             effective_budget = compute_input_token_budget(
                 soft_budget,
@@ -4505,7 +4596,8 @@ async def stream_agent_loop(
                     schema for schema in FUNCTION_TOOL_SCHEMAS
                     if schema.get("function", {}).get("name") not in _ADMIN_SCHEMA_NAMES
                 ]
-                schemas = base_schemas + route_mcp_schemas
+                mcp_to_add = route_mcp_schemas if len(route_mcp_schemas) <= 20 else route_mcp_schemas[:20]
+                schemas = base_schemas + mcp_to_add
             if route_state["ody_qwen_finetune_model"]:
                 schemas = []
             if disabled_tools:
@@ -4954,6 +5046,8 @@ async def stream_agent_loop(
             fallback_on_empty=fallback_on_empty,
             candidate_request_factory=_candidate_request,
             candidate_route_descriptors=_candidate_route_descriptors,
+            reasoning_effort=reasoning_effort,
+            thinking_budget=thinking_budget,
         ):
             if not _round_first_event_logged:
                 _round_first_event_logged = True

@@ -658,18 +658,35 @@ class McpManager:
     _cached_prompt_desc = None
     _cached_prompt_desc_key = None
 
-    def get_tool_descriptions_for_prompt(self, disabled_map: Optional[Dict[str, set]] = None) -> str:
+    def get_tool_descriptions_for_prompt(
+        self,
+        disabled_map: Optional[Dict[str, set]] = None,
+        relevant_tools: Optional[Set[str]] = None,
+        max_per_server: Optional[int] = None,
+    ) -> str:
         """Generate text describing MCP tools for the agent system prompt. Cached."""
         cache_key = (
             frozenset((k, frozenset(v)) for k, v in (disabled_map or {}).items()),
             len(self._tools),
             self._generation,
+            frozenset(relevant_tools) if relevant_tools is not None else None,
+            max_per_server,
         )
         if self._cached_prompt_desc is not None and self._cached_prompt_desc_key == cache_key:
             return self._cached_prompt_desc
         tools = self.get_all_tools(disabled_map)
         if not tools:
             return ""
+
+        if relevant_tools is not None:
+            tools = [
+                t for t in tools
+                if t.get("qualified_name") in relevant_tools or t.get("name") in relevant_tools
+            ]
+            if not tools:
+                self._cached_prompt_desc = ""
+                self._cached_prompt_desc_key = cache_key
+                return ""
 
         lines = ["\n\nYou also have access to external MCP tool servers. These tools are called via native function calling:"]
         by_server = {}
@@ -686,6 +703,8 @@ class McpManager:
             by_server[sn].append(t)
 
         if not by_server:
+            self._cached_prompt_desc = ""
+            self._cached_prompt_desc_key = cache_key
             return ""
 
         for server_name, server_tools in by_server.items():
@@ -694,7 +713,9 @@ class McpManager:
             identity = self._connections.get(sid, {}).get("identity", "")
             label = f"{server_name} ({identity})" if identity else server_name
             lines.append(f"\n**{label}:**")
-            for t in server_tools:
+            eff_max = max_per_server if max_per_server is not None else (None if relevant_tools is not None else 8)
+            display_tools = server_tools if eff_max is None else server_tools[:eff_max]
+            for t in display_tools:
                 # Truncate long descriptions
                 desc = t['description'][:120] + '...' if len(t['description']) > 120 else t['description']
                 # Include the tool's declared inputs so the model calls it with
@@ -702,6 +723,8 @@ class McpManager:
                 # alone (issue #2509).
                 args_hint = _format_mcp_params(t.get("input_schema"))
                 lines.append(f"  - {t['qualified_name']}: {desc}{args_hint}")
+            if eff_max is not None and len(server_tools) > eff_max:
+                lines.append(f"  ... and {len(server_tools) - eff_max} more tools available from {server_name}")
 
         result = "\n".join(lines)
         self._cached_prompt_desc = result

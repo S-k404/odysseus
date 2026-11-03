@@ -1990,6 +1990,7 @@ function _makeGalleryDraggable(content) {
 import * as Modals from './modalManager.js';
 
 export function openGallery() {
+  if (window.odysseusDismissAllModals) window.odysseusDismissAllModals('gallery-modal');
   // If already minimized — restore in place, preserve all state
   if (Modals.isRegistered('gallery-modal') && Modals.isMinimized('gallery-modal')) {
     Modals.restore('gallery-modal');
@@ -2025,7 +2026,7 @@ export function openGallery() {
     <div class="modal-content gallery-modal-content">
       <div class="modal-header">
         <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>Gallery <span id="gallery-stats" class="memory-count" style="font-size:0.6em;opacity:0.6;font-weight:normal;margin-left:8px"></span></h4>
-        <button class="modal-close" id="gallery-close">&times;</button>
+        <button class="modal-close" id="gallery-close" aria-label="Close gallery"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <div class="gallery-tabs">
         <button class="gallery-tab active" data-tab="images">

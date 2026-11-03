@@ -74,7 +74,31 @@ _BUILTIN_SERVERS = {
     "memory":     ("mcp_servers/memory_server.py",     "Built-in: Memory"),
     "rag":        ("mcp_servers/rag_server.py",        "Built-in: RAG"),
     "email":      ("mcp_servers/email_server.py",      "Built-in: Email"),
+    "obsidian":   ("mcp_servers/obsidian_server.py",   "Built-in: Obsidian"),
+    "notion":     ("mcp_servers/notion_server.py",     "Built-in: Notion (read-only)"),
+    "ece_inventory":   ("mcp_servers/ece_inventory_server.py",   "Built-in: ECE Lab Inventory"),
+    "kicad_eda":       ("mcp_servers/kicad_eda_server.py",       "Built-in: KiCad & Hardware Design"),
+    "sqlite_explorer": ("mcp_servers/sqlite_explorer_server.py", "Built-in: SQLite Explorer"),
+    "arxiv_research":  ("mcp_servers/arxiv_server.py",          "Built-in: arXiv Academic Research"),
+    "onshape_cad":     ("mcp_servers/onshape_server.py",        "Built-in: Onshape CAD"),
+    "blender":         ("mcp_servers/blender_server.py",        "Built-in: Blender 3D"),
+    "pubmed":          ("mcp_servers/pubmed_server.py",         "Built-in: PubMed Biomedical Research"),
+    "github":          ("mcp_servers/github_server.py",         "Built-in: GitHub Integration"),
+    "coursera":        ("mcp_servers/coursera_server.py",       "Built-in: Coursera Catalog"),
+    "canva":           ("mcp_servers/canva_server.py",          "Built-in: Canva Design"),
+    "figma":           ("mcp_servers/figma_server.py",          "Built-in: Figma Design"),
+    "cloudflare":      ("mcp_servers/cloudflare_server.py",     "Built-in: Cloudflare Developer Platform"),
+    "gdrive":          ("mcp_servers/gdrive_server.py",         "Built-in: Google Drive"),
+    "cad_maker":       ("mcp_servers/cad_maker_server.py",       "Built-in: 3D CAD & Parametric Enclosure Maker"),
+    "pcb_maker":       ("mcp_servers/pcb_maker_server.py",       "Built-in: KiCad & JLCPCB PCB Maker"),
+    "computer_use":    ("mcp_servers/computer_use_server.py",   "Built-in: Computer Use & Screen Recording"),
+    "music_gen":       ("mcp_servers/music_gen_server.py",      "Built-in: Music & Neural Audio Generator"),
+    "project_manager": ("mcp_servers/project_manager_server.py","Built-in: Claude Project & Markdown Manager"),
 }
+
+# Built-in servers that need a credential and are skipped when it is unset:
+# server id -> environment variable that must be non-empty.
+_BUILTIN_REQUIRES_ENV = {"notion": "NOTION_TOKEN", "onshape_cad": "ONSHAPE_ACCESS_KEY"}
 
 # NPX-based built-in servers (run via npx, not Python)
 _BUILTIN_NPX_SERVERS = {
@@ -190,6 +214,10 @@ async def register_builtin_servers(mcp_manager):
             logger.warning(f"Built-in MCP server {name} error: {type(e).__name__}: {e}")
 
     for server_id, (script, name) in _BUILTIN_SERVERS.items():
+        required_env = _BUILTIN_REQUIRES_ENV.get(server_id)
+        if required_env and not os.environ.get(required_env, "").strip():
+            logger.info(f"Built-in MCP server skipped (set {required_env} to enable): {name}")
+            continue
         script_path = os.path.join(base_dir, script)
         if not os.path.exists(script_path):
             logger.warning(f"Built-in MCP server script not found: {script_path}")

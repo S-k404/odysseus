@@ -227,7 +227,7 @@ async def test_glob_confined_e2e(ws, admin):
     # not as a match that returns the file's path. The not-found message echoes
     # the pattern the model supplied, so the signal is the absence of a match,
     # not the absence of the path string.
-    rel = os.path.relpath(secret, os.path.realpath(ws))
+    rel = os.path.relpath(os.path.realpath(secret), os.path.realpath(ws))
     _, r = await execute_tool_block(_block("glob", json.dumps({"pattern": rel})), owner="a", workspace=ws)
     assert r["exit_code"] == 0 and "No files" in r["output"] and secret not in r["output"]
     _, r = await execute_tool_block(_block("glob", json.dumps({"pattern": secret})), owner="a", workspace=ws)

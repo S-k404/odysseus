@@ -69,17 +69,44 @@ class AITTSManager {
     }
 
     extractPlainText(content) {
-        // Strip <think>/<thinking> blocks (model reasoning)
-        let cleaned = content.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
+        if (!content) return '';
 
-        // Create a temporary div to parse HTML/markdown
+        // Strip HTML thinking elements if passed as rendered DOM string
         const temp = document.createElement('div');
-        temp.innerHTML = cleaned;
+        temp.innerHTML = content;
+        temp.querySelectorAll('.thinking-section, .thinking-content, .live-think-inner, .thinking-header, pre, code').forEach(el => el.remove());
 
-        // Remove code blocks
+        let raw = temp.innerHTML || content;
+
+        // Strip complete and unclosed <think>/<thinking>/<thought> blocks (with or without attributes like time="1.5")
+        raw = raw.replace(/<(?:(?:mm:)?think(?:ing)?|thought)(?:\s+[^>]*)?>[\s\S]*?(?:<\/(?:(?:mm:)?think(?:ing)?|thought)>|$)/gi, '');
+
+        // Strip channel thoughts (<|channel>thought ... <|channel>response)
+        raw = raw.replace(/<\|channel>thought[\s\S]*?(?:<\|channel>(?:response|text)?|$)/gi, '');
+
+        // Strip prefix/untagged thinking blocks
+        const reasoningPrefixRe = /^\s*(?:(?:v?iew\s+)?thinking(?:\s+process)?\s*:?|(?:thought|reasoning(?:\s+process)?|reflection|scratchpad|internal\s+monologue)\s*:?|the user |user wants|user asks|user said|we need |i need |i should |i will |i'll |i am going |i have to |i must |let me (?:think|look|see|check|read|review|analyze|parse|figure|draft|write)|they are |the question |i can |looking at |plan:\s*)/i;
+        const replyBoundaryRe = /\n\n(?=(?:Hey|Hi[ !]|Hello|Sure|Certainly|Yes|No[, ]|OK|Here |Absolutely|Of course|Great|Alright|Thanks|Welcome|Good |To answer|In summary|Below is|Here's|(?:Response|Reply|Answer|Final (?:Response|Answer)|Output)\s*:|---+|===+))/i;
+
+        const trimmed = raw.trimStart();
+        if (reasoningPrefixRe.test(trimmed)) {
+            const match = replyBoundaryRe.exec(trimmed);
+            if (match) {
+                raw = trimmed.slice(match.index + 2).trimStart();
+                raw = raw.replace(/^(?:Response|Reply|Answer|Final (?:Response|Answer)|Output)\s*:\s*/i, '');
+            } else {
+                // Entire text is reasoning without a separated reply
+                raw = '';
+            }
+        }
+
+        // Strip tool calls and structured markers
+        raw = raw.replace(/\[\/?TOOL_CALL\][\s\S]*?(?:\[\/TOOL_CALL\]|$)/gi, '');
+        raw = raw.replace(/<(?:[\w]+:)?(?:tool_call|function_call)>[\s\S]*?(?:<\/(?:[\w]+:)?(?:tool_call|function_call)>|$)/gi, '');
+
+        // Re-parse into temporary div to extract pure text without HTML tags or code
+        temp.innerHTML = raw;
         temp.querySelectorAll('pre, code').forEach(el => el.remove());
-
-        // Get text content
         let text = temp.textContent || temp.innerText || '';
 
         // Clean up markdown syntax
@@ -368,12 +395,19 @@ class AITTSManager {
             .replace(/```[\s\S]*$/g, '');
 
         var plainText = this.extractPlainText(text);
-        if (!plainText || plainText.length <= this._streamSentencesSent) return;
+        if (!plainText) return;
+
+        // Reset cursor if plainText shrank (e.g. thinking tags closed and were stripped)
+        if (this._streamSentencesSent > plainText.length) {
+            this._streamSentencesSent = 0;
+        }
+
+        if (plainText.length <= this._streamSentencesSent) return;
 
         var newRegion = plainText.substring(this._streamSentencesSent);
 
-        var sentences = [];
         var current = '';
+        var matchEndIndex = 0;
         for (var i = 0; i < newRegion.length; i++) {
             current += newRegion[i];
             var ch = newRegion[i];
@@ -382,27 +416,25 @@ class AITTSManager {
                 var lastWord = current.trim().split(/\s/).pop() || '';
                 if (/^\d+\.$/.test(lastWord)) continue;
                 if (/^[A-Z][a-z]?\.$/.test(lastWord)) continue;
-                sentences.push(current.trim());
+                var trimmed = current.trim();
+                if (trimmed.length < 15) {
+                    // Accumulate short greetings/phrases into the next sentence
+                    continue;
+                }
+                var btn = this._streamButton || this._createPlaceholderButton();
+                var resetFn = this._streamResetFn || function() {};
+                this.enqueue(trimmed, btn, resetFn);
                 current = '';
+                matchEndIndex = i + 1;
             }
         }
 
-        if (sentences.length === 0) return;
-
-        var advancedChars = 0;
-        for (var j = 0; j < sentences.length; j++) {
-            var sentence = sentences[j];
-            if (sentence.length < 15) {
-                advancedChars += sentence.length + 1;
-                continue;
+        if (matchEndIndex > 0) {
+            while (matchEndIndex < newRegion.length && /\s/.test(newRegion[matchEndIndex])) {
+                matchEndIndex++;
             }
-            var btn = this._streamButton || this._createPlaceholderButton();
-            var resetFn = this._streamResetFn || function() {};
-            this.enqueue(sentence, btn, resetFn);
-            advancedChars += sentence.length + 1;
+            this._streamSentencesSent += matchEndIndex;
         }
-
-        this._streamSentencesSent += advancedChars;
     }
 
     _createPlaceholderButton() {
@@ -437,6 +469,10 @@ class AITTSManager {
 
         var plainText = this.extractPlainText(text);
         if (!plainText) return;
+
+        if (this._streamSentencesSent > plainText.length) {
+            this._streamSentencesSent = 0;
+        }
 
         var remaining = plainText.substring(this._streamSentencesSent).trim();
         if (remaining.length >= 15) {

@@ -294,30 +294,32 @@ class TestHostDockerAccess:
     def test_socket_without_explicit_opt_in_is_disabled(
         self,
         monkeypatch,
-        tmp_path,
         flag,
     ):
-        socket_path = tmp_path / "docker.sock"
-        with socket.socket(socket.AF_UNIX) as unix_socket:
-            unix_socket.bind(str(socket_path))
-            if flag is None:
-                monkeypatch.delenv("ODYSSEUS_ENABLE_HOST_DOCKER", raising=False)
-            else:
-                monkeypatch.setenv("ODYSSEUS_ENABLE_HOST_DOCKER", flag)
+        import tempfile
+        with tempfile.TemporaryDirectory(dir="/tmp") as short_dir:
+            socket_path = Path(short_dir) / "docker.sock"
+            with socket.socket(socket.AF_UNIX) as unix_socket:
+                unix_socket.bind(str(socket_path))
+                if flag is None:
+                    monkeypatch.delenv("ODYSSEUS_ENABLE_HOST_DOCKER", raising=False)
+                else:
+                    monkeypatch.setenv("ODYSSEUS_ENABLE_HOST_DOCKER", flag)
 
-            assert _host_docker_access_enabled(str(socket_path)) is False
+                assert _host_docker_access_enabled(str(socket_path)) is False
 
     def test_explicit_opt_in_with_unix_socket_is_enabled(
         self,
         monkeypatch,
-        tmp_path,
     ):
-        socket_path = tmp_path / "docker.sock"
-        with socket.socket(socket.AF_UNIX) as unix_socket:
-            unix_socket.bind(str(socket_path))
-            monkeypatch.setenv("ODYSSEUS_ENABLE_HOST_DOCKER", "true")
+        import tempfile
+        with tempfile.TemporaryDirectory(dir="/tmp") as short_dir:
+            socket_path = Path(short_dir) / "docker.sock"
+            with socket.socket(socket.AF_UNIX) as unix_socket:
+                unix_socket.bind(str(socket_path))
+                monkeypatch.setenv("ODYSSEUS_ENABLE_HOST_DOCKER", "true")
 
-            assert _host_docker_access_enabled(str(socket_path)) is True
+                assert _host_docker_access_enabled(str(socket_path)) is True
 
 
 class TestPackageProbeStatus:

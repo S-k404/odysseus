@@ -36,8 +36,8 @@ ODY_USER="$(getent passwd "$PUID" | cut -d: -f1)"
 DOCKER_SOCK="${DOCKER_SOCK:-/var/run/docker.sock}"
 if [ "${ODYSSEUS_ENABLE_HOST_DOCKER:-}" = "true" ] && [ -S "$DOCKER_SOCK" ]; then
     SOCK_GID="$(stat -c '%g' "$DOCKER_SOCK" 2>/dev/null || echo '')"
-    if [ -n "$SOCK_GID" ] && [ "$SOCK_GID" != "0" ]; then
-        if ! getent group "$SOCK_GID" >/dev/null 2>&1; then
+    if [ -n "$SOCK_GID" ]; then
+        if [ "$SOCK_GID" != "0" ] && ! getent group "$SOCK_GID" >/dev/null 2>&1; then
             groupadd -g "$SOCK_GID" docker_host || true
         fi
         SOCK_GROUP="$(getent group "$SOCK_GID" | cut -d: -f1)"
@@ -63,7 +63,13 @@ is_broad_mount_root() {
 repair_tree_ownership() {
     dir="$1"
     if [ -d "$dir" ]; then
-        find "$dir" -xdev -not -uid "$PUID" -print0 2>/dev/null \
+        # Ensure root directory has correct ownership
+        chown "$PUID:$PGID" "$dir" 2>/dev/null || true
+        # Prune massive static libraries/caches (local, huggingface, fastembed_cache)
+        # to avoid scanning tens of thousands of files across VirtioFS on macOS
+        find "$dir" -xdev \
+            \( -path "$dir/local" -o -path "$dir/huggingface" -o -path "$dir/fastembed_cache" -o -path "$dir/lib" \) -prune \
+            -o -not -uid "$PUID" -print0 2>/dev/null \
             | xargs -0 -r chown "$PUID:$PGID" 2>/dev/null || true
     fi
 }
@@ -144,10 +150,11 @@ export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 # vLLM and helper scripts land here because /app is the non-root user's HOME.
 export PATH="/app/.local/bin:$PATH"
 
-# Run first-time setup as the app user so data/ files get the right ownership.
-# setup.py is idempotent — skips auth.json / .env if they already exist.
-# || true so a setup failure never prevents the container from starting.
-"$GOSU_BIN" "$ODY_USER" "$PYTHON_BIN" /app/setup.py || true
+# Run first-time setup only when initial app.db or auth.json don't exist yet,
+# avoiding 3-5s of redundant schema and dependency checking on every restart.
+if [ ! -f /app/data/app.db ] || [ ! -f /app/data/auth.json ]; then
+    "$GOSU_BIN" "$ODY_USER" "$PYTHON_BIN" /app/setup.py || true
+fi
 
 # Drop root and run the actual app. `gosu` is preferred over `su` /
 # `sudo` because it cleans up the process tree (no extra shell layer)

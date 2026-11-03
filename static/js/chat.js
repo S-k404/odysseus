@@ -36,6 +36,7 @@ import {
 } from './chatModelProvenance.js';
 import { createTerminalStreamError, isRecoverableStreamError } from './chatStreamErrors.js';
 import { loadPanel } from './panels.js';
+import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens } from './modelPicker.js';
 
   const RESEARCH_TIMEOUT_MS = 360000;
   const DEFAULT_TIMEOUT_MS = 120000;
@@ -1930,6 +1931,22 @@ import { loadPanel } from './panels.js';
         fd.append('preset_id', presetsModule.getSelectedPreset());
       }
 
+      // Reasoning Effort & Thinking Budget (Claude 3.7 & thinking models)
+      try {
+        const effort = getThinkingEffort();
+        const budget = getThinkingBudget();
+        if (effort) fd.append('reasoning_effort', effort);
+        if (budget) fd.append('thinking_budget', String(budget));
+      } catch (_) {}
+
+      // High Context Runs (up to 200k Ultra Context)
+      try {
+        const ctxMode = getContextMode();
+        const ctxTokens = getContextTokens();
+        if (ctxMode) fd.append('context_mode', ctxMode);
+        if (ctxTokens) fd.append('context_tokens', String(ctxTokens));
+      } catch (_) {}
+
 
       // Superseded during preflight (uploads, document saves): a newer send
       // owns the session. Bailing here — before registration and before the
@@ -2566,6 +2583,7 @@ import { loadPanel } from './panels.js';
           replyHost.appendChild(replyElement);
         }
         _renderStream();
+        if (streamingTTS && window.aiTTSManager) window.aiTTSManager._streamSentencesSent = 0;
       }
 
       function _scheduleThinkingGrace() {
@@ -2650,7 +2668,7 @@ import { loadPanel } from './panels.js';
             } else {
               // Pure non-tag: find reply boundary
               const _rPrefixes = markdownModule.startsWithReasoningPrefix;
-              const _rpStarts = ['Hey', 'Hi ', 'Hi!', 'Hello', 'Sure', 'Yes', 'No ', 'No,', 'Yo', 'OK', 'Here', 'Absolutely', 'Of course', 'Great', 'Alright', 'Thanks', 'Welcome', 'Good ', "I'm happy", "I'd be"];
+              const _rpStarts = ['Hey', 'Hi ', 'Hi!', 'Hello', 'Sure', 'Certainly', 'Yes', 'No ', 'No,', 'Yo', 'OK', 'Here', 'Absolutely', 'Of course', 'Great', 'Alright', 'Thanks', 'Welcome', 'Good ', "I'm happy", "I'd be", 'To answer', 'In summary', 'Below is', "Here's"];
               const _rt = (extractedReply || '').trimStart();
               if (_rPrefixes(_rt)) {
                 const _rLines = _rt.split('\n');
@@ -2960,7 +2978,10 @@ import { loadPanel } from './panels.js';
                       _renderStream({ knownNormal: true, displayText: _roundDisplayProjector.current() });
                     }
                     _scheduleThinkingSpinner();
-                    if (streamingTTS) window.aiTTSManager.streamingUpdate(roundText);
+                    if (streamingTTS && !isThinking) {
+                      const ttsText = roundReplyText !== null ? roundReplyText : roundText;
+                      window.aiTTSManager.streamingUpdate(ttsText);
+                    }
                   }
                   continue;
                 }
@@ -3083,8 +3104,11 @@ import { loadPanel } from './panels.js';
                     _renderStream({ knownNormal: true, displayText: _roundDisplayProjector.current() });
                   }
                   _scheduleThinkingSpinner();
-                  // Feed streaming TTS with accumulated text
-                  if (streamingTTS) window.aiTTSManager.streamingUpdate(roundText);
+                  // Feed streaming TTS with accumulated text (reply-only if thinking occurred)
+                  if (streamingTTS && !isThinking) {
+                    const ttsText = roundReplyText !== null ? roundReplyText : roundText;
+                    window.aiTTSManager.streamingUpdate(ttsText);
+                  }
                 }
               } else if (json.type === 'research_progress') {
                 if (_isBg) continue; // Skip DOM updates in background
@@ -4098,7 +4122,7 @@ import { loadPanel } from './panels.js';
                 _finalReply = _garbledMatch[1].trim();
               } else {
                 // Pure non-tag: find reply boundary by prefix patterns
-                const _rs2 = ['Hey', 'Hi ', 'Hi!', 'Hello', 'Sure', 'Yes', 'No ', 'No,', 'Yo', 'OK', 'Here', 'Absolutely', 'Of course', 'Great', 'Alright', 'Thanks', 'Welcome', 'Good ', "I'm happy", "I'd be"];
+                const _rs2 = ['Hey', 'Hi ', 'Hi!', 'Hello', 'Sure', 'Certainly', 'Yes', 'No ', 'No,', 'Yo', 'OK', 'Here', 'Absolutely', 'Of course', 'Great', 'Alright', 'Thanks', 'Welcome', 'Good ', "I'm happy", "I'd be", 'To answer', 'In summary', 'Below is', "Here's"];
                 const _fr = (finalDisplay || '').trimStart();
                 if (markdownModule.startsWithReasoningPrefix(_fr)) {
                   const _fLines = _fr.split('\n');
@@ -4211,11 +4235,18 @@ import { loadPanel } from './panels.js';
 		            _attachPlanActions(footerTarget, accumulated);
 		          }
 		        } catch (_) {}
-	        if (addAITTSButton && accumulated && window.aiTTSManager?._provider !== 'disabled' && window.aiTTSManager?.available) {
-	          addAITTSButton(footerTarget, accumulated);
+	        let finalMsgText = roundReplyText !== null ? roundReplyText : accumulated;
+	        if (roundReplyText === null && accumulated) {
+	          const _tb = markdownModule.extractThinkingBlocks(accumulated);
+	          if (_tb.thinkingBlocks?.length) {
+	            finalMsgText = _tb.content || '';
+	          }
+	        }
+	        if (addAITTSButton && finalMsgText && window.aiTTSManager?._provider !== 'disabled' && window.aiTTSManager?.available) {
+	          addAITTSButton(footerTarget, finalMsgText);
 	        }
         // TTS auto-play: streaming mode flushes remaining text, non-streaming enqueues full message
-        if (accumulated && window.aiTTSManager && window.aiTTSManager.autoPlay) {
+        if (finalMsgText && window.aiTTSManager && window.aiTTSManager.autoPlay) {
           const ttsBtn = holder.querySelector('.ai-tts-button');
           if (ttsBtn) {
             var ICON_PLAY_TTS = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
@@ -4228,7 +4259,7 @@ import { loadPanel } from './panels.js';
             };
             if (streamingTTS) {
               // Flush remaining partial sentence and attach the real button
-              window.aiTTSManager.streamingEnd(accumulated);
+              window.aiTTSManager.streamingEnd(finalMsgText);
               window.aiTTSManager.streamingAttachButton(ttsBtn, resetFn);
               // If still playing sentences from the stream, show stop icon
               if (window.aiTTSManager.isPlaying || window.aiTTSManager._processing) {
@@ -4239,7 +4270,7 @@ import { loadPanel } from './panels.js';
               }
             } else {
               // Non-streaming fallback (autoPlay toggled mid-stream, etc.)
-              window.aiTTSManager.enqueue(accumulated, ttsBtn, resetFn);
+              window.aiTTSManager.enqueue(finalMsgText, ttsBtn, resetFn);
             }
           }
         }

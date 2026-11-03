@@ -93,10 +93,16 @@ def update_search_config(api_key: str = None, **kwargs):
             SEARCH_CONFIG[k] = v
 
 
-def _call_provider(provider_name: str, query: str, count: int, time_filter: str = None) -> List[dict]:
-    """Call a search provider by name. Returns list of results or empty list."""
+def _call_provider(provider_name: str, query: str, count: int, time_filter: str = None,
+                   research_mode: bool = False) -> List[dict]:
+    """Call a search provider by name. Returns list of results or empty list.
+
+    ``research_mode=True`` enables academic-query guardrails for SearXNG
+    (stop-word sanitisation + science/it category auto-routing).
+    """
     if provider_name == "searxng":
-        return searxng_search_api(query, count, time_filter=time_filter)
+        return searxng_search_api(query, count, time_filter=time_filter,
+                                  research_mode=research_mode)
     elif provider_name == "brave":
         return brave_search(query, count, time_filter)
     elif provider_name == "duckduckgo":
@@ -108,6 +114,7 @@ def _call_provider(provider_name: str, query: str, count: int, time_filter: str 
     elif provider_name == "serper":
         return serper_search(query, count, time_filter)
     return []
+
 
 
 # If the self-hosted SearXNG instance is up but all enabled engines return

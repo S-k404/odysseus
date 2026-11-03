@@ -675,7 +675,7 @@ function _getModal() {
     <div class="modal-content cal-modal-content">
       <div class="modal-header">
         <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Calendar</h4>
-        <button class="close-btn" id="cal-close">✖</button>
+        <button class="close-btn" id="cal-close" aria-label="Close calendar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <div class="modal-body" id="cal-body"></div>
     </div>`;
@@ -2521,7 +2521,7 @@ async function _showCalSettings() {
     <div class="modal-content" style="width:420px;max-width:92vw;">
       <div class="modal-header">
         <h4>Calendar Settings</h4>
-        <button class="close-btn" id="cal-settings-close">\u2716</button>
+        <button class="close-btn" id="cal-settings-close" aria-label="Close calendar settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <div class="modal-body" style="padding:16px;display:flex;flex-direction:column;gap:16px;">
         <div>
@@ -3478,6 +3478,7 @@ function _wheelNav(e) {
 }
 
 function openCalendar() {
+  if (window.odysseusDismissAllModals) window.odysseusDismissAllModals('calendar-modal');
   if (_open) return;
   // If currently minimized — restore in place, preserve all state
   if (Modals.isMinimized('calendar-modal')) {

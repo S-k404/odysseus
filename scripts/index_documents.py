@@ -58,7 +58,7 @@ def main():
         return
     
     # Supported file extensions
-    supported_extensions = {'.txt', '.md', '.json'}
+    supported_extensions = {'.txt', '.md', '.json', '.pdf'}
     logger.info(f"Scanning '{docs_directory}' for {', '.join(sorted(supported_extensions))} files...")
     
     # Find all supported files
@@ -71,7 +71,7 @@ def main():
     
     if not files_to_index:
         logger.warning(f"No supported files found in '{docs_directory}' directory.")
-        logger.info("Add .txt, .md, or .json files to the directory and run this script again.")
+        logger.info("Add .txt, .md, .json, or .pdf files to the directory and run this script again.")
         return
     
     logger.info(f"Found {len(files_to_index)} files to index:")

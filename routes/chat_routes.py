@@ -1000,6 +1000,10 @@ def setup_chat_routes(
         incognito = str(form_data.get("incognito", "")).lower() == "true"
         plan_mode = str(form_data.get("plan_mode") or (body or {}).get("plan_mode") or "").lower() == "true"
         chat_mode = str(form_data.get("mode", "")).lower()  # 'chat' or 'agent'
+        reasoning_effort = form_data.get("reasoning_effort") or (body or {}).get("reasoning_effort")
+        thinking_budget = form_data.get("thinking_budget") or (body or {}).get("thinking_budget")
+        context_mode = form_data.get("context_mode") or (body or {}).get("context_mode")
+        context_tokens = form_data.get("context_tokens") or (body or {}).get("context_tokens")
         tool_approval_id = (
             form_data.get("tool_approval_id")
             or (body or {}).get("tool_approval_id")
@@ -1353,6 +1357,16 @@ def setup_chat_routes(
             allowed_models=_allowed_models_for_request(request),
         )
 
+        _req_ctx = 0
+        if context_tokens:
+            try:
+                _req_ctx = int(context_tokens)
+            except (ValueError, TypeError):
+                pass
+        if not _req_ctx and context_mode:
+            _mode_map = {"16k": 16384, "32k": 32768, "64k": 65536, "128k": 131072, "200k": 200000}
+            _req_ctx = _mode_map.get(str(context_mode).lower(), 0)
+
         # Build shared context (stream path uses enhanced_message for context preface)
         ctx = await build_chat_context(
             sess, request, chat_handler, chat_processor,
@@ -1383,6 +1397,7 @@ def setup_chat_routes(
                 else None
             ),
             persist_user_message=not tool_approval_continuation,
+            requested_context_length=_req_ctx,
         )
 
         _research_flags = {"do": do_research}  # Mutable container for generator scope
@@ -1827,6 +1842,7 @@ def setup_chat_routes(
             )
             _chat_request_factory = None
             _selected_context_length = getattr(ctx, "context_length", 0)
+            # ctx.context_length already has the composer's limit applied.
             _chat_request_state = {
                 "context_lengths": {0: _selected_context_length},
                 "requests": {0: messages},
@@ -1988,6 +2004,8 @@ def setup_chat_routes(
                         fallback_on_empty=_foreground_policy.fallback_on_empty,
                         candidate_request_factory=_chat_request_factory,
                         candidate_route_descriptors=_foreground_route_descriptors,
+                        reasoning_effort=reasoning_effort,
+                        thinking_budget=thinking_budget,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:
@@ -2371,6 +2389,8 @@ def setup_chat_routes(
                         external_untrusted_context_seen=external_untrusted_context_seen,
                         delegated_credential=_delegated_credential,
                         exact_approval=exact_tool_approval,
+                        reasoning_effort=reasoning_effort,
+                        thinking_budget=thinking_budget,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:

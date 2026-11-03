@@ -89,6 +89,12 @@ def _configured_endpoint_kind(url: str) -> Optional[str]:
 
 def is_local_endpoint(url: str) -> bool:
     """Check if URL points to a local/private/tailscale address."""
+    try:
+        host = urlparse(url).hostname or ""
+        if host in _LOCAL_HOSTS:
+            return True
+    except Exception:
+        pass
     kind = _configured_endpoint_kind(url)
     if kind in ("api", "proxy"):
         return False
@@ -96,7 +102,7 @@ def is_local_endpoint(url: str) -> bool:
         return True
     try:
         host = urlparse(url).hostname or ""
-        return host in _LOCAL_HOSTS or _is_private_ip_literal(host) or _in_tailscale_range(host)
+        return _is_private_ip_literal(host) or _in_tailscale_range(host)
     except Exception:
         return False
 
@@ -111,6 +117,8 @@ REQUEST_TIMEOUT = 5
 # Substring matching — use the shortest unique prefix so variants get caught.
 KNOWN_CONTEXT_WINDOWS = {
     # --- Anthropic ---
+    'claude-3-7-sonnet': 200000,
+    'claude-3.7-sonnet': 200000,
     'claude-sonnet-4-5': 200000,
     'claude-sonnet-4-6': 200000,
     'claude-sonnet-4': 200000,
@@ -118,6 +126,7 @@ KNOWN_CONTEXT_WINDOWS = {
     'claude-haiku-4': 200000,
     'claude-haiku-3-5': 200000,
     'claude-3-5-sonnet': 200000,
+    'claude-3.5-sonnet': 200000,
     'claude-3-5-haiku': 200000,
     'claude-3-opus': 200000,
     'claude-3-sonnet': 200000,
@@ -181,10 +190,14 @@ KNOWN_CONTEXT_WINDOWS = {
     'llama-3': 131072,
 
     # --- Qwen ---
+    'qwen3.6': 131072,
+    'qwen3-vl': 32768,
     'qwen3': 131072,
+    'qwen2.5-coder': 131072,
     'qwen2.5': 131072,
     'qwen2': 32768,
     'qwq': 32768,
+    'stable-diffusion': 128000,
 
     # --- Cohere ---
     'command-r-plus': 128000,
@@ -334,7 +347,7 @@ def _model_ctx_from_entry(m: dict) -> Optional[int]:
         val = m.get(field)
         if val and isinstance(val, (int, float)) and val > 0:
             return int(val)
-    meta = m.get("meta") or m.get("model_extra") or {}
+    meta = m.get("meta") or m.get("model_extra") or m.get("dmr") or {}
     if isinstance(meta, dict):
         # n_ctx is the actual serving context (set via -c flag in llama.cpp)
         for field in ("n_ctx", "context_length", "context_window", "max_model_len"):
@@ -403,7 +416,9 @@ def _query_context_length(endpoint_url: str, model: str) -> Tuple[int, bool]:
     # Large OpenAI-compatible proxies can make /models expensive. If the
     # endpoint is explicitly configured as API/proxy, prefer known context
     # metadata (or the default) over downloading the full catalog.
-    if configured_kind in ("api", "proxy"):
+    # Local endpoints (host.docker.internal, localhost) have cheap /models and
+    # should report their real serving context rather than theoretical model maximums.
+    if configured_kind in ("api", "proxy") and not is_local_endpoint(endpoint_url):
         if known:
             logger.info(f"Using known context window for {model}: {known}")
             return known, True
@@ -431,6 +446,13 @@ def _query_context_length(endpoint_url: str, model: str) -> Tuple[int, bool]:
                         return n_ctx, True
         except Exception:
             pass
+        # Docker Model Runner: /v1/models has no context field, but its own
+        # /models API reports the --ctx-size each model is started with.
+        from src.docker_model_runner import runner_context_size
+        dmr_ctx = runner_context_size(endpoint_url, model, timeout=REQUEST_TIMEOUT)
+        if dmr_ctx:
+            logger.info(f"Docker Model Runner serves {model} with context_size={dmr_ctx}")
+            return dmr_ctx, True
 
     # GitHub Copilot's /models requires auth + X-GitHub-Api-Version headers that
     # aren't available here; an unauthenticated probe just 400s. All Copilot

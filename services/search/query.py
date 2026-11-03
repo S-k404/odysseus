@@ -131,6 +131,91 @@ def build_enhanced_query(query: str, time_filter: str = None) -> str:
 
 
 # ----------------------------------------------------------------------
+# Academic / technical query detection
+# ----------------------------------------------------------------------
+
+# Words that signal consumer-intent and are semantically useless in
+# academic/technical research loops. Stripped at query-sanitisation time
+# when the domain is detected as academic/technical.
+_CONSUMER_STOPWORDS: frozenset = frozenset({
+    "top", "best", "buy", "shop", "cheap", "deal", "deals", "price",
+    "prices", "sale", "discount", "discounts", "offer", "offers",
+    "review", "reviews", "rating", "ratings", "compare", "comparison",
+    "local", "near", "nearby", "news", "trending", "viral", "popular",
+    "recommended", "sponsored",
+})
+
+# Strong indicators that a query is academic/technical in nature.
+_ACADEMIC_SIGNALS: frozenset = frozenset({
+    "paper", "papers", "arxiv", "preprint", "survey", "benchmark",
+    "algorithm", "model", "neural", "transformer", "attention",
+    "gradient", "loss", "epoch", "inference", "training", "dataset",
+    "corpus", "embedding", "latent", "diffusion", "generative",
+    "reinforcement", "fine-tuning", "finetuning", "llm", "slm",
+    "rag", "retrieval", "vector", "quantization", "distillation",
+    "pruning", "rope", "kv cache", "flash", "lora", "qlora",
+    "research", "study", "studies", "journal", "conference", "acl",
+    "neurips", "icml", "iclr", "emnlp", "cvpr", "iccv", "eccv",
+    "github", "huggingface", "openreview", "semanticscholar",
+    "implementation", "framework", "architecture", "performance",
+    "evaluation", "ablation", "baseline", "sota", "state-of-the-art",
+})
+
+# SearXNG category and engine overrides for academic/technical queries.
+ACADEMIC_SEARXNG_CATEGORIES = "science,it"
+ACADEMIC_DOMAIN_FILTERS = [
+    "site:arxiv.org",
+    "site:openreview.net",
+    "site:github.com",
+    "site:huggingface.co",
+    "site:semanticscholar.org",
+]
+
+
+def is_academic_query(query: str) -> bool:
+    """Return True when the query reads as academic/technical research.
+
+    Uses a fast token-intersection heuristic: any overlap with
+    ``_ACADEMIC_SIGNALS`` is treated as a positive signal.
+    """
+    if not isinstance(query, str):
+        return False
+    tokens = set(re.findall(r"\b\w[\w-]*\b", query.lower()))
+    # Also check two-word phrases (kv cache, flash attention, etc.)
+    bigrams = {
+        " ".join(pair)
+        for pair in zip(query.lower().split(), query.lower().split()[1:])
+    }
+    return bool((tokens | bigrams) & _ACADEMIC_SIGNALS)
+
+
+def sanitize_research_query(query: str, strip_stopwords: bool = True) -> str:
+    """Sanitize a deep-research query for academic/technical SearXNG use.
+
+    - Strips consumer stop-words that bias results toward e-commerce /
+      news portals (e.g. "best", "buy", "top", "local").
+    - Preserves quoted phrases and important capitalised tokens intact.
+
+    Returns the cleaned query string (may be identical to the input if no
+    stop-words are found).
+    """
+    if not isinstance(query, str) or not strip_stopwords:
+        return query
+
+    # Split into tokens, preserving quoted sub-strings as atomic units.
+    # Simple approach: only strip bare unquoted stop-words at word boundaries.
+    tokens = query.split()
+    cleaned = []
+    for tok in tokens:
+        bare = tok.strip('",;:.!?').lower()
+        if bare in _CONSUMER_STOPWORDS:
+            continue
+        cleaned.append(tok)
+    result = " ".join(cleaned).strip()
+    return result if result else query  # never return empty
+
+
+# ----------------------------------------------------------------------
 # Cache duration helpers
 # ----------------------------------------------------------------------
 def _is_news_query(query: str) -> bool:

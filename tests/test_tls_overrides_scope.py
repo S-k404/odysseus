@@ -50,11 +50,9 @@ def _grep_files(pattern: str) -> set[str]:
     hits: set[str] = set()
     for path in REPO.rglob("*.py"):
         rel = path.relative_to(REPO).as_posix()
-        if rel.startswith("tests/"):
+        if rel.startswith((".", "tests/")) or "/." in rel:
             continue
         if rel == "src/tls_overrides.py":  # definition site, not a caller
-            continue
-        if rel.startswith(".claude/") or "/.claude/" in rel:
             continue
         try:
             body = path.read_text(encoding="utf-8", errors="ignore")
