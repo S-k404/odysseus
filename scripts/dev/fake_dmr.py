@@ -23,6 +23,9 @@ LOG = sys.argv[2]
 MODELS = {
     "ai/small-chat:1": "gguf",
     "ai/big-chat:2": "gguf",
+    # "qwen3" makes Odysseus treat it as a native tool-calling model (the path
+    # your real qwen3 models take); the chat-* names take the keyword path.
+    "ai/qwen3-test:8B": "gguf",
     "mlx/vllm-coder:latest": "safetensors",
     "speaches-ai/Kokoro-82M-v1.0-ONNX": "onnx",
     "docker.io/ai/stable-diffusion:latest": "diffusers",

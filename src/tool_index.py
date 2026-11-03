@@ -593,6 +593,62 @@ class ToolIndex:
         return base
 
 
+# ── Lexical MCP tool selection ──
+#
+# The index above needs ChromaDB, which the native Mac app only has while the
+# Docker stack is up. Without it the agent's keyword fallback names built-in
+# tools only, so a tool-calling model was never offered any MCP tool. This
+# picks them by words in the query instead.
+
+_MCP_QUERY_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "from", "that", "this", "about", "into", "over",
+    "find", "get", "show", "give", "make", "use", "using", "please", "can", "you",
+    "your", "what", "which", "how", "any", "some", "all", "new", "recent", "latest",
+    "are", "was", "has", "have", "need", "want", "tell", "look", "help", "list",
+    "search", "tool", "tools", "file", "data", "one", "two",
+    "check", "run", "create", "open", "read", "write", "add", "set", "start", "stop",
+})
+
+
+def _mcp_words(text: str) -> Set[str]:
+    words = set()
+    for w in re.findall(r"[a-z0-9]+", (text or "").lower()):
+        if len(w) < 3 or w in _MCP_QUERY_STOPWORDS:
+            continue
+        # "papers" / "paper", "tables" / "table"
+        words.add(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w)
+    return words
+
+
+def keyword_mcp_tools(query: str, mcp_mgr, disabled_map: Optional[Dict] = None, limit: int = 8) -> Set[str]:
+    """Qualified names of the MCP tools whose words match ``query``.
+
+    A tool qualifies when the query names it or its server (``arxiv``, ``pcb``,
+    ``sqlite``), or shares at least two description words. Names count triple.
+    Returns at most ``limit`` tools, best match first, as ``mcp__<server>__<tool>``.
+    """
+    q = _mcp_words(query)
+    if not q or not mcp_mgr:
+        return set()
+    try:
+        tools = mcp_mgr.get_all_tools(disabled_map or {})
+    except Exception:
+        return set()
+    scored = []
+    for t in tools:
+        if t.get("is_disabled") or not t.get("qualified_name"):
+            continue
+        server = _mcp_words(t.get("server_id", ""))
+        name = server | _mcp_words(t.get("name", ""))
+        desc = _mcp_words(f"{t.get('server_name', '')} {t.get('description', '')}") - name
+        name_hits, desc_hits = len(q & name), len(q & desc)
+        if not (name_hits or desc_hits >= 2):
+            continue
+        scored.append((3 * name_hits + desc_hits + (2 if q & server else 0), t["qualified_name"]))
+    scored.sort(key=lambda s: (-s[0], s[1]))
+    return {qualified for _, qualified in scored[:limit]}
+
+
 # ── Singleton ──
 
 _tool_index: Optional[ToolIndex] = None
