@@ -4,24 +4,39 @@
 // way to unload them. Reads Docker Model Runner (127.0.0.1:12434) and the kernel
 // directly, so it needs no login and works while the window is closed.
 //
+// The icon is animated (MenuBarView.swift): a ring shows memory in use and a moon orbits
+// faster while the GPU is busy. A click opens a small card; "Details" opens the rest.
+//
 
 import Cocoa
 import Darwin
+import IOKit
+import SwiftUI
 
 struct ModelRow {
     let name: String
     let sizeGB: Double?
     let contextTokens: Int?
     let embedding: Bool
+
+    /// "huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S" -> "qwen3.6-35b-a3b"
+    var shortName: String {
+        let last = name.split(separator: "/").last.map(String.init) ?? name
+        let base = last.split(separator: ":").first.map(String.init) ?? last
+        return base.hasSuffix("-gguf") ? String(base.dropLast(5)) : base
+    }
 }
 
 struct MemoryStats {
     let totalGB: Double
     let usedGB: Double
+    let compressedGB: Double
+    let cachedGB: Double
     let swapUsedGB: Double
     let pressure: Int  // 1 normal, 2 warning, 4 critical
 
     var availableGB: Double { max(totalGB - usedGB, 0) }
+    var fraction: Double { totalGB > 0 ? min(usedGB / totalGB, 1) : 0 }
     var pressureName: String { pressure >= 4 ? "critical" : (pressure >= 2 ? "warning" : "normal") }
 }
 
@@ -32,7 +47,57 @@ struct MenuStats {
     var models: [ModelRow] = []
     var memory: MemoryStats?
     var load1 = 0.0
+    var cpuPercent: Double?
+    var gpuPercent: Double?
+    var thermal = "Nominal"
+    var uptime: TimeInterval = 0
     var guardNote: String?
+
+    var chatModels: [ModelRow] { models.filter { !$0.embedding } }
+    var loadedGB: Double { chatModels.compactMap { $0.sizeGB }.reduce(0, +) }
+}
+
+struct RunnerStats {
+    var serverUp = false
+    var runnerUp = false
+    var models: [ModelRow] = []
+}
+
+struct SystemStats {
+    var memory: MemoryStats?
+    var load1 = 0.0
+    var cpuPercent: Double?
+    var gpuPercent: Double?
+    var thermal = "Nominal"
+    var uptime: TimeInterval = 0
+    var guardNote: String?
+}
+
+extension MenuStats {
+    mutating func merge(_ r: RunnerStats) {
+        serverUp = r.serverUp
+        runnerUp = r.runnerUp
+        models = r.models
+    }
+
+    mutating func merge(_ s: SystemStats) {
+        memory = s.memory
+        load1 = s.load1
+        cpuPercent = s.cpuPercent
+        gpuPercent = s.gpuPercent
+        thermal = s.thermal
+        uptime = s.uptime
+        guardNote = s.guardNote
+    }
+
+    /// What the icon should be doing. Memory trouble outranks everything.
+    var iconMode: MenuBarIcon.Mode {
+        if !serverUp && !runnerUp { return .off }
+        if let m = memory, m.pressure >= 4 { return .critical }
+        if let m = memory, m.pressure >= 2 { return .warning }
+        if (gpuPercent ?? 0) >= 20 { return .busy }
+        return chatModels.isEmpty ? .idle : .loaded
+    }
 }
 
 enum MenuRow {
@@ -47,23 +112,54 @@ func resolveRepoDir() -> String {
     return "/Users/shamit/Documents/Docker/Odysseus"
 }
 
+/// CPU use between two calls, from the kernel's per-core tick counters.
+final class SystemSampler {
+    private var previous: (busy: UInt64, total: UInt64)?
+
+    func cpuPercent() -> Double? {
+        var cores: natural_t = 0
+        var info: processor_info_array_t?
+        var count: mach_msg_type_number_t = 0
+        guard host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &cores, &info, &count) == KERN_SUCCESS,
+              let info = info else { return nil }
+        defer { vm_deallocate(mach_task_self_, vm_address_t(bitPattern: info), vm_size_t(count) * vm_size_t(MemoryLayout<integer_t>.stride)) }
+
+        var busy: UInt64 = 0, total: UInt64 = 0
+        for core in 0..<Int(cores) {
+            let base = core * Int(CPU_STATE_MAX)
+            let user = UInt64(info[base + Int(CPU_STATE_USER)]), sys = UInt64(info[base + Int(CPU_STATE_SYSTEM)])
+            let idle = UInt64(info[base + Int(CPU_STATE_IDLE)]), nice = UInt64(info[base + Int(CPU_STATE_NICE)])
+            busy += user + sys + nice
+            total += user + sys + nice + idle
+        }
+        defer { previous = (busy, total) }
+        guard let prev = previous, total > prev.total else { return nil }
+        return Double(busy - prev.busy) / Double(total - prev.total) * 100
+    }
+}
+
 enum StatsProvider {
     static let runnerRoot = ProcessInfo.processInfo.environment["ODYSSEUS_DMR_URL"] ?? "http://127.0.0.1:12434"
 
     // MARK: Reading
 
-    static func collect(port: Int, repoDir: String) -> MenuStats {
+    /// Everything once. `sampler` should be primed (called once before) for a CPU figure.
+    static func collect(port: Int, repoDir: String, sampler: SystemSampler? = nil) -> MenuStats {
         var stats = MenuStats()
         stats.port = port
-        stats.serverUp = httpStatus("http://127.0.0.1:\(port)/", timeout: 1.0).map { (200...499).contains($0) } ?? false
-        stats.memory = readMemory()
-        stats.load1 = loadAverage()
-        stats.guardNote = readGuardNote(repoDir: repoDir)
+        stats.merge(readRunner(port: port))
+        stats.merge(readSystem(repoDir: repoDir, sampler: sampler))
+        return stats
+    }
 
+    /// Network side: is the server up, which models are resident. Can take a few seconds.
+    static func readRunner(port: Int) -> RunnerStats {
+        var out = RunnerStats()
+        out.serverUp = httpStatus("http://127.0.0.1:\(port)/", timeout: 1.0).map { (200...499).contains($0) } ?? false
         if let resident = httpJSON("\(runnerRoot)/engines/ps") as? [[String: Any]] {
-            stats.runnerUp = true
+            out.runnerUp = true
             let known = (httpJSON("\(runnerRoot)/models") as? [[String: Any]]) ?? []
-            stats.models = resident.compactMap { entry in
+            out.models = resident.compactMap { entry in
                 guard let name = entry["model_name"] as? String else { return nil }
                 let config = known.first { ($0["tags"] as? [String])?.contains(name) == true }?["config"] as? [String: Any]
                 return ModelRow(
@@ -74,9 +170,22 @@ enum StatsProvider {
                 )
             }
         } else {
-            stats.runnerUp = httpStatus("\(runnerRoot)/models", timeout: 1.0) != nil
+            out.runnerUp = httpStatus("\(runnerRoot)/models", timeout: 1.0) != nil
         }
-        return stats
+        return out
+    }
+
+    /// Kernel side: cheap, no network, safe to call every couple of seconds.
+    static func readSystem(repoDir: String, sampler: SystemSampler?) -> SystemStats {
+        var out = SystemStats()
+        out.memory = readMemory()
+        out.load1 = loadAverage()
+        out.cpuPercent = sampler?.cpuPercent()
+        out.gpuPercent = gpuUtilization()
+        out.thermal = thermalName()
+        out.uptime = uptimeSeconds()
+        out.guardNote = readGuardNote(repoDir: repoDir)
+        return out
     }
 
     static func readMemory() -> MemoryStats? {
@@ -92,9 +201,11 @@ enum StatsProvider {
             }
         }
         guard status == KERN_SUCCESS else { return nil }
+        let page = Double(getpagesize())
         // Activity Monitor's "Memory Used": app + wired + compressed (file cache is reclaimable).
-        let pages = UInt64(vm.internal_page_count) + UInt64(vm.wire_count) + UInt64(vm.compressor_page_count)
-        let used = Double(pages) * Double(getpagesize())
+        let used = (Double(vm.internal_page_count) + Double(vm.wire_count) + Double(vm.compressor_page_count)) * page
+        let cached = (Double(vm.external_page_count) + Double(vm.purgeable_count)) * page
+        let compressed = Double(vm.compressor_page_count) * page
 
         var swap = xsw_usage()
         var swapSize = MemoryLayout<xsw_usage>.size
@@ -105,13 +216,47 @@ enum StatsProvider {
         _ = sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &levelSize, nil, 0)
 
         let gib = Double(1 << 30)
-        return MemoryStats(totalGB: Double(total) / gib, usedGB: used / gib,
-                           swapUsedGB: Double(swap.xsu_used) / gib, pressure: Int(level))
+        return MemoryStats(totalGB: Double(total) / gib, usedGB: used / gib, compressedGB: compressed / gib,
+                           cachedGB: cached / gib, swapUsedGB: Double(swap.xsu_used) / gib, pressure: Int(level))
     }
 
     static func loadAverage() -> Double {
         var loads = [Double](repeating: 0, count: 3)
         return getloadavg(&loads, 3) > 0 ? loads[0] : 0
+    }
+
+    /// GPU busy percent from the accelerator's own counters (no privileges needed).
+    static func gpuUtilization() -> Double? {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &iterator) == KERN_SUCCESS else { return nil }
+        defer { IOObjectRelease(iterator) }
+        var best: Double?
+        var entry = IOIteratorNext(iterator)
+        while entry != 0 {
+            let stats = IORegistryEntryCreateCFProperty(entry, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? [String: Any]
+            if let value = (stats?["Device Utilization %"] as? NSNumber)?.doubleValue { best = max(best ?? 0, value) }
+            IOObjectRelease(entry)
+            entry = IOIteratorNext(iterator)
+        }
+        return best
+    }
+
+    static func thermalName() -> String {
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal: return "Nominal"
+        case .fair: return "Fair"
+        case .serious: return "Serious"
+        case .critical: return "Critical"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    static func uptimeSeconds() -> TimeInterval {
+        var boot = timeval()
+        var size = MemoryLayout<timeval>.size
+        guard sysctlbyname("kern.boottime", &boot, &size, nil, 0) == 0 else { return 0 }
+        return max(Date().timeIntervalSince1970 - Double(boot.tv_sec), 0)
     }
 
     /// "Odysseus unloaded models at 15:02 (memory pressure critical)" for 24 h after it happens.
@@ -185,7 +330,7 @@ enum StatsProvider {
 
     private final class Box: @unchecked Sendable { var value: Any? }
 
-    // MARK: Menu content
+    // MARK: Text
 
     static func fmt(_ gb: Double) -> String { String(format: gb >= 10 ? "%.0f GB" : "%.1f GB", gb) }
 
@@ -194,34 +339,48 @@ enum StatsProvider {
         return t >= 1024 ? "\(t / 1024)k ctx" : "\(t) ctx"
     }
 
-    /// Pure: the menu as rows, so it can be printed in tests as well as shown.
+    static func uptimeText(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60), hours = minutes / 60, days = hours / 24
+        if days > 0 { return "\(days)d \(hours % 24)h" }
+        if hours > 0 { return "\(hours)h \(minutes % 60)m" }
+        return "\(minutes)m"
+    }
+
+    /// Short model line for the card: size and context, or why there is no model.
+    static func modelDetail(_ model: ModelRow) -> String {
+        let parts = [model.sizeGB.map(fmt), contextText(model.contextTokens), model.embedding ? "embedding" : nil]
+        return parts.compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// Plain-text version of the card, for `--dump-menubar` and checks without a screen.
+    static func summaryLines(for stats: MenuStats) -> [String] {
+        var lines: [String] = []
+        lines.append(stats.serverUp ? "Odysseus: running on :\(stats.port)" : "Odysseus: server not running")
+        if !stats.runnerUp {
+            lines.append("Model runner: not reachable")
+        } else if stats.chatModels.isEmpty {
+            lines.append("Model: none loaded")
+        } else {
+            for m in stats.chatModels { lines.append("Model: \(m.shortName) · \(modelDetail(m))") }
+        }
+        if let mem = stats.memory {
+            let pct = Int((mem.fraction * 100).rounded())
+            lines.append("Memory: \(fmt(mem.usedGB)) of \(fmt(mem.totalGB)) (\(pct)%) · pressure \(mem.pressureName)")
+            lines.append("  compressed \(fmt(mem.compressedGB)) · cached \(fmt(mem.cachedGB)) · swap \(fmt(mem.swapUsedGB))")
+        }
+        lines.append("GPU: \(stats.gpuPercent.map { String(format: "%.0f%%", $0) } ?? "n/a") · CPU: \(stats.cpuPercent.map { String(format: "%.0f%%", $0) } ?? "n/a") · load \(String(format: "%.1f", stats.load1))")
+        lines.append("Thermal: \(stats.thermal.lowercased()) · up \(uptimeText(stats.uptime))")
+        if let note = stats.guardNote { lines.append(note) }
+        lines.append("Icon: \(stats.iconMode)")
+        return lines
+    }
+
+    /// The right-click menu: quick actions only (the details live in the card).
     static func rows(for stats: MenuStats, unload: Selector, open: Selector, log: Selector, quit: Selector) -> [MenuRow] {
         var rows: [MenuRow] = []
         rows.append(.header(stats.serverUp ? "Odysseus  ● running on :\(stats.port)" : "Odysseus  ○ server not running"))
         rows.append(.separator)
-
-        rows.append(.header(stats.runnerUp ? "Models in memory" : "Model runner not reachable"))
-        let chat = stats.models.filter { !$0.embedding }
-        if stats.runnerUp && chat.isEmpty { rows.append(.info("None loaded")) }
-        for model in stats.models {
-            let short = model.name.split(separator: "/").last.map(String.init) ?? model.name
-            let detail = [model.sizeGB.map(fmt), contextText(model.contextTokens), model.embedding ? "embedding" : nil]
-                .compactMap { $0 }.joined(separator: " · ")
-            rows.append(.info(detail.isEmpty ? short : "\(short) — \(detail)"))
-        }
-        rows.append(.separator)
-
-        if let mem = stats.memory {
-            let pct = mem.totalGB > 0 ? Int((mem.usedGB / mem.totalGB * 100).rounded()) : 0
-            rows.append(.info("Memory: \(fmt(mem.usedGB)) of \(fmt(mem.totalGB)) in use (\(pct)%)"))
-            rows.append(.info("Available: \(fmt(mem.availableGB)) · Swap: \(fmt(mem.swapUsedGB))"))
-            rows.append(.info("Pressure: \(mem.pressureName)" + (mem.pressure >= 2 ? "  ⚠︎" : "")))
-        }
-        rows.append(.info(String(format: "CPU load: %.1f (1 min)", stats.load1)))
-        if let note = stats.guardNote { rows.append(.info(note)) }
-        rows.append(.separator)
-
-        rows.append(.action(chat.isEmpty ? "Unload all models" : "Unload all models (\(chat.count))", unload))
+        rows.append(.action(stats.chatModels.isEmpty ? "Unload all models" : "Unload all models (\(stats.chatModels.count))", unload))
         rows.append(.action("Open Odysseus", open))
         rows.append(.action("Show server log", log))
         rows.append(.separator)
@@ -229,22 +388,64 @@ enum StatsProvider {
         return rows
     }
 
-    /// Title next to the icon: loaded weights, or a warning when memory is tight.
-    static func title(for stats: MenuStats) -> String {
-        var parts: [String] = []
-        if let mem = stats.memory, mem.pressure >= 2 { parts.append("⚠︎") }
-        let loaded = stats.models.filter { !$0.embedding }.compactMap { $0.sizeGB }.reduce(0, +)
-        if !stats.models.filter({ !$0.embedding }).isEmpty { parts.append(String(format: "%.0fG", loaded)) }
-        return parts.isEmpty ? "" : " " + parts.joined(separator: " ")
+    static func tooltip(for stats: MenuStats) -> String {
+        var parts = ["Odysseus"]
+        if !stats.chatModels.isEmpty { parts.append("\(fmt(stats.loadedGB)) of models loaded") }
+        if let mem = stats.memory { parts.append("memory \(Int((mem.fraction * 100).rounded()))% (\(mem.pressureName))") }
+        return parts.joined(separator: " · ")
     }
 }
 
-final class MenuBarStats: NSObject, NSMenuDelegate {
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let menu = NSMenu()
-    private let queue = DispatchQueue(label: "odysseus.menubar", qos: .utility)
-    private var timer: Timer?
-    private var latest = MenuStats()
+// MARK: - Model shared with the card
+
+struct MenuBarActions {
+    let open: () -> Void
+    let unload: () -> Void
+    let log: () -> Void
+    let quit: () -> Void
+}
+
+/// What the card shows. Histories are one sample every `MenuBarStats.sampleInterval` seconds.
+final class MenuBarModel: ObservableObject {
+    static let historyLength = 90
+
+    @Published var stats = MenuStats()
+    @Published var cpuHistory: [Double] = []
+    @Published var gpuHistory: [Double] = []
+    @Published var memoryHistory: [Double] = []
+    @Published var expanded = false
+
+    func record(_ stats: MenuStats) {
+        self.stats = stats
+        func push(_ list: inout [Double], _ value: Double?) {
+            guard let value = value else { return }
+            list.append(value)
+            if list.count > Self.historyLength { list.removeFirst(list.count - Self.historyLength) }
+        }
+        push(&cpuHistory, stats.cpuPercent)
+        push(&gpuHistory, stats.gpuPercent)
+        push(&memoryHistory, stats.memory.map { $0.fraction * 100 })
+    }
+}
+
+// MARK: - Controller
+
+final class MenuBarStats: NSObject {
+    static let sampleInterval: TimeInterval = 2.0
+
+    private var statusItem: NSStatusItem!
+    private let popover = NSPopover()
+    private let model = MenuBarModel()
+    private let systemQueue = DispatchQueue(label: "odysseus.menubar.system", qos: .utility)
+    private let runnerQueue = DispatchQueue(label: "odysseus.menubar.runner", qos: .utility)
+    private let sampler = SystemSampler()
+    private var sampleTimer: Timer?
+    private var animationTimer: Timer?
+    private var animatedMode: MenuBarIcon.Mode?
+    private var angle = 0.0
+    private var lastFrame = Date()
+    private var outsideClickMonitor: Any?
+    private var ticks = 0
     private let port: Int
     private let repoDir: String
     private let onOpen: () -> Void
@@ -255,37 +456,151 @@ final class MenuBarStats: NSObject, NSMenuDelegate {
         self.repoDir = repoDir
         self.onOpen = onOpen
         self.onQuit = onQuit
+        // The default slot is the one next to the notch, which a crowded bar (or an overlay app) covers.
+        // Start 400 pt from the right edge instead (from the second launch on: macOS reads the position
+        // at process start); once the user ⌘-drags it, macOS remembers their spot and this is not touched.
+        let positionKey = "NSStatusItem Preferred Position odysseus-statusitem"
+        if UserDefaults.standard.object(forKey: positionKey) == nil { UserDefaults.standard.set(400.0, forKey: positionKey) }
         super.init()
-        latest.port = port
-        if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "cpu", accessibilityDescription: "Odysseus model stats")
-            image?.isTemplate = true
-            button.image = image
-            button.imagePosition = .imageLeading
-            button.toolTip = "Odysseus: local models and memory"
-        }
-        menu.delegate = self
-        statusItem.menu = menu
-        refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in self?.refresh() }
+        model.stats.port = port
+        installStatusItem()
+
+        let actions = MenuBarActions(
+            open: { [weak self] in self?.closePopover(); self?.onOpen() },
+            unload: { [weak self] in self?.unloadAll() },
+            log: { [weak self] in self?.showLog() },
+            quit: { [weak self] in self?.quitApp() }
+        )
+        let controller = NSHostingController(rootView: MenuBarView(model: model, actions: actions) { [weak self] height in
+            self?.popover.contentSize = NSSize(width: MenuBarView.width, height: height)
+        })
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentSize = NSSize(width: MenuBarView.width, height: 260)
+
+        sample()
+        sampleTimer = Timer(timeInterval: Self.sampleInterval, repeats: true) { [weak self] _ in self?.sample() }
+        RunLoop.main.add(sampleTimer!, forMode: .common)
     }
 
-    func refresh() {
-        queue.async { [weak self] in
+    private func installStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.autosaveName = "odysseus-statusitem"  // keeps its place in the menu bar between launches
+        statusItem.isVisible = true
+        if let button = statusItem.button {
+            button.image = MenuBarIcon.image(angle: angle, pulse: 0, memory: model.stats.memory?.fraction ?? 0, mode: mode)
+            button.imagePosition = .imageOnly
+            button.toolTip = StatsProvider.tooltip(for: model.stats)
+            button.target = self
+            button.action = #selector(clicked(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+    }
+
+    // MARK: Sampling
+
+    private func sample() {
+        ticks += 1
+        let doRunner = (ticks - 1) % 3 == 0  // network side every ~6 s, kernel side every 2 s
+        systemQueue.async { [weak self] in
             guard let self = self else { return }
-            let stats = StatsProvider.collect(port: self.port, repoDir: self.repoDir)
+            let system = StatsProvider.readSystem(repoDir: self.repoDir, sampler: self.sampler)
             DispatchQueue.main.async {
-                self.latest = stats
-                self.statusItem.button?.title = StatsProvider.title(for: stats)
+                var stats = self.model.stats
+                stats.merge(system)
+                self.apply(stats)
+            }
+        }
+        if doRunner {
+            runnerQueue.async { [weak self] in
+                guard let self = self else { return }
+                let runner = StatsProvider.readRunner(port: self.port)
+                DispatchQueue.main.async {
+                    var stats = self.model.stats
+                    stats.merge(runner)
+                    self.apply(stats)
+                }
             }
         }
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        let rows = StatsProvider.rows(for: latest, unload: #selector(unloadAll), open: #selector(openApp),
-                                      log: #selector(showLog), quit: #selector(quitApp))
-        for row in rows {
+    private func apply(_ stats: MenuStats) {
+        model.record(stats)
+        statusItem.button?.toolTip = StatsProvider.tooltip(for: stats)
+        updateAnimation()
+        renderIcon()
+    }
+
+    // MARK: Icon animation
+
+    private var mode: MenuBarIcon.Mode { model.stats.iconMode }
+
+    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// Run the animation timer at the rate the current mode wants; stop it when the icon should be still.
+    private func updateAnimation() {
+        let wanted: MenuBarIcon.Mode? = (mode == .off || reduceMotion) ? nil : mode
+        guard wanted != animatedMode else { return }
+        animatedMode = wanted
+        animationTimer?.invalidate()
+        animationTimer = nil
+        guard let wanted = wanted else { return }
+        lastFrame = Date()
+        let timer = Timer(timeInterval: 1.0 / wanted.framesPerSecond, repeats: true) { [weak self] _ in self?.advanceFrame() }
+        RunLoop.main.add(timer, forMode: .common)
+        animationTimer = timer
+    }
+
+    private func advanceFrame() {
+        let now = Date()
+        angle += now.timeIntervalSince(lastFrame) * mode.revolutionsPerSecond * 2 * .pi
+        angle = angle.truncatingRemainder(dividingBy: 2 * .pi)
+        lastFrame = now
+        renderIcon()
+    }
+
+    private func renderIcon() {
+        let pulse = (sin(Date().timeIntervalSinceReferenceDate * 5) + 1) / 2
+        statusItem.button?.image = MenuBarIcon.image(angle: angle, pulse: pulse, memory: model.stats.memory?.fraction ?? 0, mode: mode)
+    }
+
+    // MARK: Clicks
+
+    @objc private func clicked(_ sender: NSStatusBarButton) {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            closePopover()
+            showQuickMenu(from: sender)
+        } else if popover.isShown {
+            closePopover()
+        } else {
+            openPopover(from: sender)
+        }
+    }
+
+    private func openPopover(from button: NSStatusBarButton) {
+        model.expanded = false  // the first click is always the small card
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.closePopover()
+        }
+        sample()
+    }
+
+    private func closePopover() {
+        popover.performClose(nil)
+        if let monitor = outsideClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            outsideClickMonitor = nil
+        }
+    }
+
+    private func showQuickMenu(from button: NSStatusBarButton) {
+        let menu = NSMenu()
+        for row in StatsProvider.rows(for: model.stats, unload: #selector(unloadAllFromMenu), open: #selector(openFromMenu),
+                                      log: #selector(showLogFromMenu), quit: #selector(quitFromMenu)) {
             switch row {
             case .separator:
                 menu.addItem(.separator())
@@ -304,41 +619,64 @@ final class MenuBarStats: NSObject, NSMenuDelegate {
                 menu.addItem(item)
             }
         }
-        refresh()  // so the next time it opens it is fresh
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
     }
 
-    /// For checks without a screen grab: after a few seconds, write whether the item is on screen and its menu.
+    /// For checks without a screen grab: after a few seconds, write whether the item is on screen and what it shows.
     func writeDebug(to path: String) {
+        let openCard = ProcessInfo.processInfo.environment["ODYSSEUS_MENUBAR_DEBUG_OPEN"] != nil  // also open the card, expanded if "details"
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-            guard let self = self else { return }
-            self.menuNeedsUpdate(self.menu)
-            let button = self.statusItem.button
-            let info: [String: Any] = [
-                "visible": button?.window?.isVisible ?? false,
-                "frame": button?.window.map { NSStringFromRect($0.frame) } ?? "none",
-                "screenTop": NSScreen.main.map { NSStringFromRect($0.frame) } ?? "none",
-                "title": button?.title ?? "",
-                "hasImage": button?.image != nil,
-                "menu": self.menu.items.map { $0.isSeparatorItem ? "---" : $0.title },
-            ]
-            if let data = try? JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted]) {
-                try? data.write(to: URL(fileURLWithPath: path))
+            guard let self = self, let button = self.statusItem.button else { return }
+            if openCard {
+                self.openPopover(from: button)
+                self.model.expanded = ProcessInfo.processInfo.environment["ODYSSEUS_MENUBAR_DEBUG_OPEN"] == "details"
             }
+            DispatchQueue.main.asyncAfter(deadline: .now() + (openCard ? 1.5 : 0)) { self.writeDebugNow(to: path) }
         }
     }
 
-    @objc private func unloadAll() {
-        queue.async { [weak self] in
+    private func writeDebugNow(to path: String) {
+        let button = statusItem.button
+        let menuRows = StatsProvider.rows(for: model.stats, unload: #selector(unloadAllFromMenu), open: #selector(openFromMenu),
+                                          log: #selector(showLogFromMenu), quit: #selector(quitFromMenu))
+        let popoverWindow = popover.contentViewController?.view.window
+        let info: [String: Any] = [
+            "visible": button?.window?.isVisible ?? false,
+            "frame": button?.window.map { NSStringFromRect($0.frame) } ?? "none",
+            "screenTop": NSScreen.main.map { NSStringFromRect($0.frame) } ?? "none",
+            "hasImage": button?.image != nil,
+            "animating": animationTimer != nil,
+            "mode": "\(mode)",
+            "popoverShown": popover.isShown,
+            "popoverFrame": popoverWindow.map { NSStringFromRect($0.frame) } ?? "none",
+            "summary": StatsProvider.summaryLines(for: model.stats),
+            "menu": menuRows.map { row -> String in
+                switch row {
+                case .separator: return "---"
+                case .header(let t), .info(let t), .action(let t, _): return t
+                }
+            },
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted]) {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+
+    // MARK: Actions
+
+    private func unloadAll() {
+        runnerQueue.async { [weak self] in
             StatsProvider.unloadAll()
-            self?.refresh()
+            DispatchQueue.main.async { self?.sample() }
         }
     }
 
-    @objc private func openApp() { onOpen() }
+    private func showLog() { NSWorkspace.shared.open(URL(fileURLWithPath: "\(repoDir)/logs/odysseus-app.log")) }
 
-    @objc private func showLog() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: "\(repoDir)/logs/odysseus-app.log"))
-    }
+    private func quitApp() { onQuit() }
 
-    @objc private func quitApp() { onQuit() }
+    @objc private func unloadAllFromMenu() { unloadAll() }
+    @objc private func openFromMenu() { onOpen() }
+    @objc private func showLogFromMenu() { showLog() }
+    @objc private func quitFromMenu() { quitApp() }
 }

@@ -70,8 +70,8 @@ PLIST
 SWIFT_SRC="$REPO_DIR/swift/OdysseusApp.swift"
 if command -v swiftc >/dev/null 2>&1 && [ -f "$SWIFT_SRC" ]; then
   echo "  compiling native macOS desktop binary (Swift + WKWebView + menu bar stats)..."
-  swiftc -O -framework Cocoa -framework WebKit \
-    "$REPO_DIR/swift/OdysseusApp.swift" "$REPO_DIR/swift/MenuBarStats.swift" "$REPO_DIR/swift/main.swift" \
+  swiftc -O -framework Cocoa -framework WebKit -framework SwiftUI \
+    "$REPO_DIR/swift/OdysseusApp.swift" "$REPO_DIR/swift/MenuBarStats.swift" "$REPO_DIR/swift/MenuBarView.swift" "$REPO_DIR/swift/main.swift" \
     -o "$APP/Contents/MacOS/$APP_NAME"
 else
   # No Swift toolchain: fall back to a shell launcher that opens the UI in a
