@@ -79,3 +79,55 @@ def test_can_be_disabled(monkeypatch):
     assert not il.enabled()
     monkeypatch.delenv("ODYSSEUS_SINGLE_INSTANCE")
     assert il.enabled()
+
+
+def _stopping_holder(tmp_path, monkeypatch, **fields):
+    lock = il.InstanceLock(str(tmp_path))
+    _claim(tmp_path / il.LOCK_NAME, host=lock.claim["host"], pid=424242, runtime="native", **fields)
+    monkeypatch.setattr(il, "_pid_alive", lambda pid: True)
+    return lock
+
+
+def test_server_that_is_shutting_down_is_waited_for(tmp_path, monkeypatch):
+    # Quit and reopen the Mac app: the old server is still closing its MCP servers.
+    lock = _stopping_holder(tmp_path, monkeypatch, stopping=True)
+    path = tmp_path / il.LOCK_NAME
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 3:  # the old server finishes and removes its claim
+            path.unlink()
+
+    monkeypatch.setattr(il.time, "sleep", fake_sleep)
+    lock.acquire()
+
+    assert len(sleeps) == 3
+    assert json.loads(path.read_text())["id"] == lock.claim["id"]
+
+
+def test_live_server_that_is_not_stopping_is_refused_without_waiting(tmp_path, monkeypatch):
+    lock = _stopping_holder(tmp_path, monkeypatch)
+    monkeypatch.setattr(il.time, "sleep", lambda s: pytest.fail("must not wait for a live server"))
+    with pytest.raises(il.DataDirInUse):
+        lock.acquire()
+
+
+def test_server_that_never_finishes_stopping_is_refused_after_the_wait(tmp_path, monkeypatch):
+    lock = _stopping_holder(tmp_path, monkeypatch, stopping=True)
+    clock = iter(range(0, 1000, 10))
+    monkeypatch.setattr(il.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(il.time, "sleep", lambda s: None)
+    with pytest.raises(il.DataDirInUse, match="native server"):
+        lock.acquire(wait_seconds=25)
+
+
+def test_stopping_flag_is_written_and_kept_by_later_heartbeat_writes(tmp_path):
+    lock = il.InstanceLock(str(tmp_path))
+    lock.acquire()
+    assert "stopping" not in json.loads((tmp_path / il.LOCK_NAME).read_text())
+
+    lock.mark_stopping()
+    lock._write()  # what the heartbeat does
+
+    assert json.loads((tmp_path / il.LOCK_NAME).read_text())["stopping"] is True
