@@ -31,6 +31,12 @@ from urllib.parse import urlparse
 
 import httpx
 
+# The sizing maths lives in a stdlib-only module so the n8n-facing proxy can use it too.
+from src.ram_math import SIZE_UNITS as _SIZE_UNITS  # noqa: F401
+from src.ram_math import estimate_load_gb, ram_reserve_gb  # noqa: F401
+from src.ram_math import gguf_int as _gguf_int  # noqa: F401
+from src.ram_math import weights_gb as _weights_gb
+
 logger = logging.getLogger(__name__)
 
 # Roots that answered /engines/ps with something other than DMR's list are
@@ -194,52 +200,6 @@ def ram_guard_enabled() -> bool:
     return os.getenv("ODYSSEUS_RAM_GUARD", "true").lower() not in {"0", "false", "no", "off"}
 
 
-_SIZE_UNITS = {"kib": 1 / 2 ** 20, "mib": 1 / 2 ** 10, "gib": 1.0, "kb": 1e3 / 2 ** 30, "mb": 1e6 / 2 ** 30, "gb": 1e9 / 2 ** 30}
-
-
-def _weights_gb(entry: Optional[dict]) -> Optional[float]:
-    """Model file size in GiB from DMR's ``config.size`` ("14.29GiB", "4.28GB", "934.69MiB")."""
-    raw = str(((entry or {}).get("config") or {}).get("size") or "")
-    m = re.match(r"\s*([\d.]+)\s*([KMG]i?B)\s*$", raw, re.I)
-    return float(m.group(1)) * _SIZE_UNITS[m.group(2).lower()] if m else None
-
-
-def _gguf_int(gguf: dict, suffix: str) -> Optional[int]:
-    for key, value in gguf.items():
-        if key.endswith(suffix):
-            try:
-                return int(float(value))
-            except (TypeError, ValueError):
-                return None
-    return None
-
-
-def estimate_load_gb(entry: Optional[dict], context: Optional[int]) -> Optional[float]:
-    """GiB a model needs once loaded: weights + KV cache at its served context + buffers.
-
-    The KV cache is read from the model's own metadata (layers, KV heads, head size,
-    and how often attention runs on hybrid models). Checked against measured loads:
-    qwen3-8b @32k 10 GB (estimate ~11), qwen3.6-35b @128k 19 GB (estimate ~19).
-    """
-    weights = _weights_gb(entry)
-    if weights is None:
-        return None
-    gguf = ((entry or {}).get("config") or {}).get("gguf") or {}
-    ctx = context or 0
-    layers = _gguf_int(gguf, ".block_count")
-    kv_heads = _gguf_int(gguf, ".attention.head_count_kv") or _gguf_int(gguf, ".attention.head_count")
-    key_len = _gguf_int(gguf, ".attention.key_length")
-    if not key_len:
-        emb, heads = _gguf_int(gguf, ".embedding_length"), _gguf_int(gguf, ".attention.head_count")
-        key_len = emb // heads if emb and heads else None
-    if layers and kv_heads and key_len and ctx:
-        value_len = _gguf_int(gguf, ".attention.value_length") or key_len
-        attention_layers = layers / (_gguf_int(gguf, ".full_attention_interval") or 1)
-        kv = ctx * attention_layers * kv_heads * (key_len + value_len) * 2 / 2 ** 30  # fp16
-        return weights + kv + 1.5
-    return weights * 1.15 + 1.0 + (ctx / 32768 * 2.5 if ctx else 0.0)
-
-
 def resident_models(endpoint_url: str, timeout: float = 3.0) -> Optional[List[str]]:
     """Chat models currently in memory (embedding runners excluded), None if unknown."""
     root = runner_root(endpoint_url)
@@ -253,13 +213,35 @@ def resident_models(endpoint_url: str, timeout: float = 3.0) -> Optional[List[st
     return [e["model_name"] for e in data if isinstance(e, dict) and e.get("model_name") and e.get("mode") != "embedding"]
 
 
+# Phrases in ram_block_reason's messages, so callers can tell "not enough RAM" from other refusals.
+_RAM_REASON_MARKERS = ("can be spared right now", "memory pressure is critical")
+
+
+def is_ram_reason(reason: Optional[str]) -> bool:
+    return any(marker in (reason or "") for marker in _RAM_REASON_MARKERS)
+
+
+def _reclaim_gb(endpoint_url: str, entries: list, resident: List[str], timeout: float = 3.0) -> float:
+    """GiB handed back when the resident models are unloaded to make room for the next one.
+
+    Each is sized like a load (weights + KV cache at the context it is served with), not by its
+    file alone: qwen3-8b @32k holds ~10 GB although the file is 4.7 GB, so counting the file
+    refused a 35B that would have fitted once the 8B was evicted.
+    """
+    total = 0.0
+    for name in resident:
+        entry = _model_entry(entries, name)
+        total += estimate_load_gb(entry, runner_context_size(endpoint_url, name, timeout)) or 0.0
+    return total
+
+
 def ram_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Optional[str]:
     """Refuse a load that clearly would not fit, instead of letting the Mac swap itself to a halt.
 
     Only fires when the model is not already in memory. Its estimated footprint
     (weights + KV cache at the served context) must fit in what is free now plus
-    what unloading the other resident models gives back, less a reserve of 10% of
-    RAM (at least 4 GB) for macOS and your apps.
+    what unloading the other resident models gives back, less the reserve
+    (``ram_reserve_gb``) for macOS and your apps.
     """
     if not model or not ram_guard_enabled():
         return None
@@ -276,8 +258,8 @@ def ram_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Opt
     resident = resident_models(endpoint_url, timeout) if snap else None
     if not snap or resident is None or model in resident:
         return None
-    reclaim = sum(1.15 * (_weights_gb(_model_entry(entries, m)) or 0.0) for m in resident)
-    reserve = max(4.0, 0.10 * float(snap["total_gb"]))
+    reclaim = _reclaim_gb(endpoint_url, entries, resident, timeout)
+    reserve = ram_reserve_gb(float(snap["total_gb"]))
     spare = float(snap["available_gb"]) + reclaim - reserve
     if snap["pressure"] >= 4:
         return (
@@ -288,9 +270,10 @@ def ram_block_reason(endpoint_url: str, model: str, timeout: float = 3.0) -> Opt
         in_use = float(snap["used_gb"]) - reclaim
         return (
             f"{model} needs about {need:.0f} GB of memory, but only about {max(spare, 0):.0f} GB can be "
-            f"spared right now ({in_use:.0f} of {float(snap['total_gb']):.0f} GB are in use by other apps). "
-            "Loading it would push the Mac into swap and freeze it. Close some apps or pick a smaller "
-            "model, or set ODYSSEUS_RAM_GUARD=0 to load it anyway."
+            f"spared right now ({in_use:.0f} of {float(snap['total_gb']):.0f} GB are in use by other apps), "
+            f"{need - max(spare, 0):.0f} GB short. Loading it would push the Mac into swap and freeze it. "
+            "Close some apps or pick a smaller model, or set ODYSSEUS_RAM_GUARD=0 to load it anyway. "
+            f"To let models use more of the Mac, lower ODYSSEUS_RAM_RESERVE_GB (now {reserve:.0f})."
         )
     return None
 
