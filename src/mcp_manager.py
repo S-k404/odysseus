@@ -143,11 +143,9 @@ class McpManager:
         self._tools: Dict[str, List[Dict]] = {}
         # server_id -> MCP ClientSession
         self._sessions: Dict[str, Any] = {}
-        # server_id -> exit stack (for cleanup)
-        self._stacks: Dict[str, Any] = {}
         # server_id -> background connect task (HTTP transport / OAuth)
         self._connect_tasks: Dict[str, Any] = {}
-        # server_id -> (owner task, stop event) for stdio/SSE connections. See
+        # server_id -> (owner task, stop event) for every transport. See
         # _connect_in_owner_task for why these connections need their own task.
         self._runners: Dict[str, Any] = {}
         # Tracking updates to tools/connections for RAG indexing / prompt cache
@@ -341,24 +339,52 @@ class McpManager:
             await asyncio.wait_for(task, timeout)
         except asyncio.TimeoutError:
             logger.warning(f"MCP server {server_id} did not shut down within {timeout:.0f}s; cancelled it")
+        except asyncio.CancelledError:
+            # The owner task was cancelled (a connect still waiting for authorization):
+            # that is expected. If it is this task being cancelled, keep propagating.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
         except Exception as e:
             logger.warning(f"Error closing MCP server {server_id}: {e}")
+
+    async def _stop_http_connect(self, server_id: str) -> None:
+        """Close an HTTP connection, or abandon one that is still connecting.
+
+        A connected owner task is asked to stop and closes its own transport. One still
+        waiting for the user to authorize in the browser never reaches its stop event, so
+        it is cancelled instead.
+        """
+        task = self._connect_tasks.pop(server_id, None)
+        connected = self._connections.get(server_id, {}).get("status") == "connected"
+        if task is not None and not task.done() and not connected:
+            task.cancel()
+        await self._stop_runner(server_id)
 
     async def _start_http_connect(self, server_id: str, name: str, url: str, wait: float = 8.0) -> bool:
         """Begin a Streamable HTTP connect in the background. Returns within
         `wait` seconds: True if it connected (cached-token path), otherwise the
         flow is awaiting browser authorization and status becomes 'needs_auth'."""
-        import asyncio
+        # Reconnecting an id that is still connected (or still connecting) must not leak the old one.
+        await self._stop_http_connect(server_id)
         self._connections[server_id] = {"status": "connecting", "name": name, "transport": "http"}
-        task = asyncio.create_task(self._connect_http(server_id, name, url))
+        ready = asyncio.get_running_loop().create_future()
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            self._connect_http(server_id, name, url, ready, stop), name=f"mcp-http-{server_id}"
+        )
         self._connect_tasks[server_id] = task
-        done, _ = await asyncio.wait({task}, timeout=wait)
-        if task in done:
-            try:
-                return task.result()
-            except Exception as e:
-                self._connections[server_id] = {"status": "error", "error": str(e), "name": name}
-                return False
+        self._runners[server_id] = (task, stop)
+        await asyncio.wait({task, ready}, timeout=wait, return_when=asyncio.FIRST_COMPLETED)
+        if ready.done():
+            connected = ready.result()
+            if not connected:
+                self._runners.pop(server_id, None)
+            return connected
+        if task.done():
+            # Cancelled before it could report; its status (if any) stays as it was.
+            self._runners.pop(server_id, None)
+            return False
         # Still running → either awaiting authorization, or discovery/DCR is
         # still in flight. If _on_redirect already published needs_auth+auth_url,
         # leave it; otherwise mark needs_auth (auth_url filled in once it fires).
@@ -371,8 +397,24 @@ class McpManager:
             }
         return False
 
-    async def _connect_http(self, server_id: str, name: str, url: str) -> bool:
-        """Connect to a Streamable HTTP MCP server (with automatic OAuth)."""
+    async def _connect_http(
+        self,
+        server_id: str,
+        name: str,
+        url: str,
+        ready: Optional["asyncio.Future"] = None,
+        stop: Optional[asyncio.Event] = None,
+    ) -> bool:
+        """Connect to a Streamable HTTP MCP server (with automatic OAuth).
+
+        Runs as the connection's owner task (see _connect_in_owner_task): after connecting
+        it stays alive until `stop` is set, and closes the transport itself, so the anyio
+        scopes are entered and exited by the same task. `ready` is resolved with True once
+        connected, or False if connecting failed; the OAuth flow may take longer than the
+        caller is willing to wait, so this keeps running after the caller has moved on.
+        """
+        stack = None
+        connected = False
         try:
             from mcp import ClientSession
             from mcp.client.streamable_http import streamablehttp_client
@@ -404,7 +446,6 @@ class McpManager:
                 })
 
             self._sessions[server_id] = session
-            self._stacks[server_id] = stack
             self._tools[server_id] = tools
             self._connections[server_id] = {
                 "status": "connected", "name": name, "transport": "http",
@@ -416,37 +457,42 @@ class McpManager:
             # to invalidate the tool-prompt cache.
             self._generation += 1
             logger.info(f"MCP server connected: {name} ({server_id}) - {len(tools)} tools via http")
+            connected = True
+            if ready is not None and not ready.done():
+                ready.set_result(True)
+            await (stop or asyncio.Event()).wait()
             return True
         except ImportError:
             logger.warning("MCP package not installed. Install with: pip install mcp")
             self._connections[server_id] = {"status": "error", "error": "mcp package not installed", "name": name}
-            return False
         except Exception as e:
-            logger.error(f"Failed to connect HTTP MCP server {name} ({server_id}): {e}")
-            self._connections[server_id] = {"status": "error", "error": str(e), "name": name}
-            return False
+            if connected:
+                logger.warning(f"MCP server {name} ({server_id}) stopped: {e}")
+            else:
+                logger.error(f"Failed to connect HTTP MCP server {name} ({server_id}): {e}")
+                self._connections[server_id] = {"status": "error", "error": str(e), "name": name}
+        finally:
+            if ready is not None and not ready.done():
+                ready.set_result(False)
+            if stack is not None:
+                try:
+                    await stack.aclose()
+                except Exception as e:
+                    logger.warning(f"Error closing MCP server {server_id}: {e}")
+        return False
 
     async def disconnect_server(self, server_id: str):
         """Disconnect from an MCP server."""
-        # Cancel any in-flight HTTP/OAuth background connect so it stops
-        # publishing status for a server that may be getting deleted.
-        task = self._connect_tasks.pop(server_id, None)
-        if task is not None and not task.done():
-            task.cancel()
         try:
             from src.mcp_oauth import clear_auth_url
             clear_auth_url(server_id)
         except Exception:
             pass
 
+        # Stops an in-flight HTTP/OAuth connect (so it stops publishing status for a
+        # server that may be getting deleted) or asks the owner task to close its connection.
+        await self._stop_http_connect(server_id)
         await self._stop_runner(server_id)
-
-        stack = self._stacks.pop(server_id, None)
-        if stack:
-            try:
-                await stack.aclose()
-            except Exception as e:
-                logger.warning(f"Error closing MCP server {server_id}: {e}")
 
         self._sessions.pop(server_id, None)
         self._tools.pop(server_id, None)
