@@ -147,6 +147,9 @@ class McpManager:
         self._stacks: Dict[str, Any] = {}
         # server_id -> background connect task (HTTP transport / OAuth)
         self._connect_tasks: Dict[str, Any] = {}
+        # server_id -> (owner task, stop event) for stdio/SSE connections. See
+        # _connect_in_owner_task for why these connections need their own task.
+        self._runners: Dict[str, Any] = {}
         # Tracking updates to tools/connections for RAG indexing / prompt cache
         self._generation = 0
 
@@ -186,21 +189,97 @@ class McpManager:
         try:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
-            from contextlib import AsyncExitStack
+        except ImportError:
+            logger.warning("MCP package not installed. Install with: pip install mcp")
+            self._connections[server_id] = {
+                "status": "error",
+                "error": "mcp package not installed",
+                "name": name,
+            }
+            return False
 
-            server_params = StdioServerParameters(
-                command=command,
-                args=args,
-                env={**os.environ, **env} if env else None,
-            )
+        server_params = StdioServerParameters(
+            command=command,
+            args=args,
+            env={**os.environ, **env} if env else None,
+        )
 
+        # Extract identity hints from env vars (e.g. email address, API name)
+        # so tool descriptions can distinguish between multiple instances of
+        # the same MCP server (e.g. two email accounts).
+        identity_hints = []
+        for k, v in (env or {}).items():
+            k_lower = k.lower()
+            if any(x in k_lower for x in ["email_address", "account", "user", "username"]):
+                identity_hints.append(v)
+        identity = ", ".join(identity_hints) if identity_hints else ""
+
+        async def open_transport(stack):
+            return await stack.enter_async_context(stdio_client(server_params))
+
+        return await self._connect_in_owner_task(
+            server_id, name, "stdio", "stdio", open_transport, ClientSession,
+            {"identity": identity},
+        )
+
+    async def _connect_sse(self, server_id: str, name: str, url: str) -> bool:
+        """Connect to an MCP server via SSE transport."""
+        try:
+            from mcp import ClientSession
+            from mcp.client.sse import sse_client
+        except ImportError:
+            logger.warning("MCP package not installed. Install with: pip install mcp")
+            self._connections[server_id] = {"status": "error", "error": "mcp package not installed", "name": name}
+            return False
+
+        async def open_transport(stack):
+            return await stack.enter_async_context(sse_client(url))
+
+        return await self._connect_in_owner_task(
+            server_id, name, "sse", "SSE", open_transport, ClientSession, {},
+        )
+
+    async def _connect_in_owner_task(
+        self,
+        server_id: str,
+        name: str,
+        transport: str,
+        log_label: str,
+        open_transport,
+        client_session_cls,
+        extra: Dict[str, Any],
+    ) -> bool:
+        """Open a stdio/SSE MCP connection inside a task that owns it for its whole life.
+
+        The transports run an anyio task group, and anyio cancel scopes must be
+        entered and exited by the same task. Opening the connection in whichever
+        task called connect_server broke that: from a request handler (adding or
+        reconnecting a connector in the UI or via the manage_mcp tool, or a builtin
+        reconnect inside an agent run) the scope belonged to the request. When the
+        request ended, anyio raised "Attempted to exit a cancel scope that isn't the
+        current tasks's current cancel scope", the reader tasks were cancelled, and
+        every later call on the connector failed with an empty error until the app
+        restarted. Closing from another task (disconnect, shutdown) failed the same way.
+
+        Here one dedicated task opens the connection, serves it, and closes it when
+        asked (disconnect_server -> _stop_runner), so the scopes never cross tasks.
+        Callers see the same behaviour as before: this returns True once connected,
+        raises the original error if connecting fails, and cleans up if the caller is
+        cancelled (for example by the startup timeout).
+        """
+        from contextlib import AsyncExitStack
+
+        # Reconnecting an id that is still connected must not leak the old process.
+        await self._stop_runner(server_id)
+
+        ready = asyncio.get_running_loop().create_future()
+        stop = asyncio.Event()
+
+        async def owner():
             stack = AsyncExitStack()
-            registered = False
-
             try:
-                transport = await stack.enter_async_context(stdio_client(server_params))
-                read_stream, write_stream = transport
-                session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
+                read_stream, write_stream = await open_transport(stack)
+                session = await stack.enter_async_context(client_session_cls(read_stream, write_stream))
 
                 await session.initialize()
                 tools_result = await session.list_tools()
@@ -217,98 +296,53 @@ class McpManager:
                         "annotations": getattr(tool, "annotations", None),
                     })
 
-                # Extract identity hints from env vars (e.g. email address, API name)
-                # so tool descriptions can distinguish between multiple instances of
-                # the same MCP server (e.g. two email accounts).
-                identity_hints = []
-                for k, v in (env or {}).items():
-                    k_lower = k.lower()
-                    if any(x in k_lower for x in ["email_address", "account", "user", "username"]):
-                        identity_hints.append(v)
-                identity = ", ".join(identity_hints) if identity_hints else ""
-
                 self._sessions[server_id] = session
-                self._stacks[server_id] = stack
                 self._tools[server_id] = tools
                 self._connections[server_id] = {
                     "status": "connected",
                     "name": name,
-                    "transport": "stdio",
+                    "transport": transport,
                     "tool_count": len(tools),
-                    "identity": identity,
+                    **extra,
                 }
-
-                registered = True
-
+                if not ready.done():
+                    ready.set_result(len(tools))
+                await stop.wait()
+            except Exception as e:
+                if not ready.done():
+                    ready.set_exception(e)
+                else:
+                    logger.warning(f"MCP server {name} ({server_id}) stopped: {e}")
             finally:
-                if not registered:
+                try:
                     await stack.aclose()
+                except Exception as e:
+                    logger.warning(f"Error closing MCP server {server_id}: {e}")
 
-            logger.info(f"MCP server connected: {name} ({server_id}) - {len(tools)} tools via stdio")
-            return True
-
-        except ImportError:
-            logger.warning("MCP package not installed. Install with: pip install mcp")
-            self._connections[server_id] = {
-                "status": "error",
-                "error": "mcp package not installed",
-                "name": name,
-            }
-            return False
-
-    async def _connect_sse(self, server_id: str, name: str, url: str) -> bool:
-        """Connect to an MCP server via SSE transport."""
+        task = asyncio.create_task(owner(), name=f"mcp-{transport}-{server_id}")
+        self._runners[server_id] = (task, stop)
         try:
-            from mcp import ClientSession
-            from mcp.client.sse import sse_client
-            from contextlib import AsyncExitStack
+            n_tools = await ready
+        except BaseException:
+            # Connect failed, or the caller was cancelled (e.g. startup timeout).
+            await self._stop_runner(server_id)
+            raise
+        logger.info(f"MCP server connected: {name} ({server_id}) - {n_tools} tools via {log_label}")
+        return True
 
-            stack = AsyncExitStack()
-            registered = False
-
-            try:
-                transport = await stack.enter_async_context(sse_client(url))
-                read_stream, write_stream = transport
-                session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
-
-                await session.initialize()
-                tools_result = await session.list_tools()
-
-                tools = []
-                for tool in tools_result.tools:
-                    tools.append({
-                        "name": tool.name,
-                        "description": tool.description or "",
-                        "input_schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
-                        # MCP tool annotations (readOnlyHint / destructiveHint) drive
-                        # plan-mode read-only gating. Absent on many servers, so we
-                        # fall back to a name heuristic in mcp_tool_is_readonly().
-                        "annotations": getattr(tool, 'annotations', None),
-                    })
-
-                self._sessions[server_id] = session
-                self._stacks[server_id] = stack
-                self._tools[server_id] = tools
-                self._connections[server_id] = {
-                    "status": "connected",
-                    "name": name,
-                    "transport": "sse",
-                    "tool_count": len(tools),
-                }
-
-                registered = True
-
-                logger.info(f"MCP server connected: {name} ({server_id}) - {len(tools)} tools via SSE")
-                return True
-
-            finally:
-                if not registered:
-                    await stack.aclose()
-
-        except ImportError:
-            logger.warning("MCP package not installed. Install with: pip install mcp")
-            self._connections[server_id] = {"status": "error", "error": "mcp package not installed", "name": name}
-            return False
+    async def _stop_runner(self, server_id: str, timeout: float = 10.0) -> None:
+        """Ask a stdio/SSE owner task to close its connection and wait for it."""
+        runner = self._runners.pop(server_id, None)
+        if runner is None:
+            return
+        task, stop = runner
+        stop.set()
+        try:
+            await asyncio.wait_for(task, timeout)
+        except asyncio.TimeoutError:
+            logger.warning(f"MCP server {server_id} did not shut down within {timeout:.0f}s; cancelled it")
+        except Exception as e:
+            logger.warning(f"Error closing MCP server {server_id}: {e}")
 
     async def _start_http_connect(self, server_id: str, name: str, url: str, wait: float = 8.0) -> bool:
         """Begin a Streamable HTTP connect in the background. Returns within
@@ -404,6 +438,8 @@ class McpManager:
             clear_auth_url(server_id)
         except Exception:
             pass
+
+        await self._stop_runner(server_id)
 
         stack = self._stacks.pop(server_id, None)
         if stack:
