@@ -712,8 +712,40 @@ async def _call_mcp_tool(
     # URL into its prose (which it mangles/hallucinates).
     if tool == "generate_image":
         _promote_image_fields(result)
+    elif "uncensor" in tool or "decensor" in tool:
+        _promote_decensor_fields(result)
 
     return result
+
+
+def _promote_decensor_fields(result: Dict) -> None:
+    """Lift the saved file path from a successful decensor tool call, link it for web preview,
+    and attach clickable file link."""
+    if not isinstance(result, dict) or result.get("exit_code") != 0:
+        return
+    out = result.get("stdout") or ""
+    m = re.search(r'(?:saved|preview):\s*(/[^\n\r]+)', out, re.I)
+    if not m:
+        return
+    saved_path = m.group(1).strip()
+    if not os.path.isfile(saved_path):
+        return
+
+    result["image_path"] = saved_path
+    try:
+        from src.constants import GENERATED_IMAGES_DIR
+        import shutil
+        import uuid
+        ext = os.path.splitext(saved_path)[1].lower() or ".png"
+        hex_name = f"{uuid.uuid4().hex}{ext}"
+        dest = os.path.join(GENERATED_IMAGES_DIR, hex_name)
+        os.makedirs(GENERATED_IMAGES_DIR, exist_ok=True)
+        shutil.copy2(saved_path, dest)
+        result["image_url"] = f"/api/generated-image/{hex_name}"
+        result["image_prompt"] = "Decensored preview" if "preview" in m.group(0).lower() else "Decensored image"
+        result["image_model"] = "Er0manga FFC"
+    except Exception:
+        pass
 
 
 def _promote_image_fields(result: Dict) -> None:
@@ -1328,6 +1360,8 @@ async def _execute_tool_block_impl(
                 from src.ram_optimizer import ensure_ram_for_tool
                 await ensure_ram_for_tool(tool)
                 result = await mcp.call_tool(tool, args)
+                if "uncensor" in tool or "decensor" in tool:
+                    _promote_decensor_fields(result)
         else:
             desc = f"mcp: {tool}"
             result = {"error": "MCP manager not available", "exit_code": 1}

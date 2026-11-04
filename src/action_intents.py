@@ -90,6 +90,10 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         ("ui", "open/show panel request", rf"{_PLEASE}(?:open|show|bring\s+up)\s+(?:me\s+)?(?:my\s+|the\s+)?{_PANEL}\b"),
         ("ui", "tool or feature toggle request", r"\b(?:disable|enable|turn\s+(?:on|off))\s+(?:the\s+)?(?:shell|search|web|browser|documents?|memory|skills|images?|calendar|email|mail|research|incognito)\b"),
 
+        # Decensor / uncensor image intent
+        ("decensor", "image decensor action request", rf"{_PLEASE}(?:decensor|uncensor|remove\s+(?:the\s+)?(?:mosaic|pixelation|censor\s*(?:bars?|spots?))|find\s+(?:the\s+)?(?:censor\w*|mosaic)|check\s+(?:the\s+)?(?:censor\w*|mosaic)|unblur)\b.*"),
+        ("decensor", "assistant decensor action request", rf"{_ACTION_QUESTION}(?:decensor|uncensor|remove\s+(?:the\s+)?(?:mosaic|pixelation|censor\s*(?:bars?|spots?))|find\s+(?:the\s+)?(?:censor\w*|mosaic)|check\s+(?:the\s+)?(?:censor\w*|mosaic)|unblur)\b.*"),
+
         # Deep research jobs, not quick conceptual mentions of research.
         ("web", "explicit web search request", rf"{_PLEASE}(?:do|run|use|perform|make)\s+(?:a\s+)?(?:web\s+search|search\s+the\s+web)\b.+"),
         ("web", "generic search request", rf"{_PLEASE}search\s+(?!(?:my\s+)?(?:chats?|history|sessions?|notes?|todos?|emails?|mail|inbox|documents?|docs|gallery|images?|files?)\b).+"),

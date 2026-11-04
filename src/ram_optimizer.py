@@ -7,7 +7,9 @@ decensor model in its MCP server. It never kills other apps and never runs
 
 import asyncio
 import logging
+import os
 import re
+import signal
 import subprocess
 from typing import Callable, Dict, List, Optional
 
@@ -113,6 +115,55 @@ async def _unload_decensor_model() -> Optional[str]:
         return None
 
 
+def _rapid_mlx_pidfile() -> str:
+    from src.runtime_paths import get_app_root
+    return os.path.join(get_app_root(), "logs", "rapid-mlx.pid")
+
+
+def _rapid_mlx_models() -> List[str]:
+    import httpx
+    port = os.environ.get("RAPID_MLX_PORT", "8081")
+    data = httpx.get(f"http://127.0.0.1:{port}/v1/models", timeout=1.5).json().get("data", [])
+    return [m.get("id", "") for m in data]
+
+
+def stop_rapid_mlx(
+    keep: str = "",
+    pidfile: Optional[str] = None,
+    command_of: Callable[[int], str] = lambda pid: _ps("ps", "-o", "command=", "-p", str(pid)),
+    served: Optional[Callable[[], List[str]]] = None,
+    kill: Callable[[int, int], None] = os.kill,
+) -> Optional[str]:
+    """Stop the Rapid-MLX engine that scripts/rapid_mlx.sh started (its model is the biggest memory user there is).
+
+    Only that engine: the process in the pid file must really be rapid-mlx (a recycled pid is never killed), and it is
+    left alone when ``keep`` is a model it serves, because the chat is using it. Returns what was done, or None.
+    """
+    path = pidfile or _rapid_mlx_pidfile()
+    try:
+        pid = int(open(path).read().strip())
+    except (OSError, ValueError):
+        return None
+    if "rapid-mlx" not in command_of(pid):
+        return None
+    if keep:
+        try:
+            names = served() if served else _rapid_mlx_models()
+        except Exception:
+            names = []
+        if keep in names:
+            return None
+    try:
+        kill(pid, signal.SIGTERM)
+    except OSError:
+        return None
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return "unloaded the Rapid-MLX engine"
+
+
 async def _settled(
     snapshot: Callable[[], Optional[Dict[str, object]]],
     sleep: Callable[[float], "asyncio.Future"] = asyncio.sleep,
@@ -147,6 +198,7 @@ async def free_ram(
     snapshot: Callable[[], Optional[Dict[str, object]]] = memory_guard.snapshot,
     apps: Callable[[], List[Dict[str, object]]] = biggest_apps,
     sleep: Callable[[float], "asyncio.Future"] = asyncio.sleep,
+    stop_engine: Callable[[str], Optional[str]] = stop_rapid_mlx,
 ) -> Dict[str, object]:
     """Unload what can be unloaded (everything except ``keep``) and report what happened."""
     before = await asyncio.to_thread(snapshot)
@@ -161,6 +213,10 @@ async def free_ram(
     decensor = await _unload_decensor_model()
     if decensor:
         steps.append(f"unloaded {decensor}")
+
+    engine = await asyncio.to_thread(stop_engine, keep)
+    if engine:
+        steps.append(engine)
 
     unloaded_something = any(step.startswith("unloaded") for step in steps)
     after = await _settled(snapshot, sleep) if unloaded_something else await asyncio.to_thread(snapshot)
@@ -206,11 +262,15 @@ async def load_block_reason_after_freeing(
 
 # Specialist tools that load a model of their own, and the GB each needs. Before one runs, other
 # models are unloaded if it would not fit: the chat model that asked for it reloads on its next
-# reply through the model slot. (The decensor tools are left out on purpose: another agent owns them.)
+# reply through the model slot.
 _HEAVY_TOOLS_GB = {
     "mcp__image_gen__generate_image": 8.0,
     "mcp__music_gen__generate_music_neural": 6.0,
     "mcp__video_gen__generate_video": 20.0,
+    "mcp__uncensor__uncensor_image": 8.0,
+    "mcp__uncensor__decensor_image": 8.0,
+    "mcp__uncensor__uncensor_folder": 8.0,
+    "mcp__uncensor__decensor_folder": 8.0,
 }
 
 
