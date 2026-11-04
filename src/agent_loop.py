@@ -1596,6 +1596,26 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
         r"(?<![\w.])/(?:games|saves)/",
     ):
         domains.add("reverse_engineering")
+    # Clock and container questions. "What time is it in Tokyo right now?" and "List my
+    # running docker containers" match no other domain, so a fresh chat counted as
+    # low-signal, took the direct reply path with no tools, and the model answered the
+    # time from memory. These only change the classification: the tools still come from
+    # normal retrieval, because a user-added Time or Docker MCP server has a random id
+    # and there is no fixed tool name to seed (so no _DOMAIN_TOOL_MAP entry).
+    if has(
+        r"\bwhat(?:'s|s| is) the (?:current |local )?time\b(?! (?:complexity|complex|limit|frame|series|out)\b)",
+        r"\bwhat time is it\b",
+        r"\b(?:current|local) time (?:in|at|for)\b",
+        r"\btime ?zones?\b",
+        r"^\s*time (?:in|at) [a-z]",
+    ):
+        domains.add("clock")
+    if has(
+        r"\bdocker\b",
+        r"\b(?:running|stopped|my)\b(?: \w+){0,2} containers?\b",
+        r"\bcontainers?\b(?: \w+){0,3} (?:running|up|down|healthy|status|logs?|stats)\b",
+    ):
+        domains.add("containers")
     if has(r"\bnotion\b"):
         domains.add("notion")
     if has(r"\bobsidian\b"):
