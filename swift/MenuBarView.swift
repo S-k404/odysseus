@@ -1,7 +1,7 @@
 //
 // MenuBarView.swift
 // The look of the Odysseus menu bar item: the animated icon, and the card that opens on click.
-// First click: status, loaded model, memory/GPU/CPU at a glance. "Details" adds the organised view.
+// First click: status, loaded model and memory at a glance, nothing animated. "Details" adds the rest.
 //
 
 import Cocoa
@@ -101,6 +101,8 @@ enum MenuBarIcon {
 }
 
 // MARK: - Card pieces
+//
+// The icon animates; the card does not. Nothing here animates when it opens or expands.
 
 private let accent = Color(red: 0.851, green: 0.467, blue: 0.341)
 
@@ -112,19 +114,6 @@ private func pressureColor(_ memory: MemoryStats?) -> Color {
 private struct HeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-
-private struct Card<Content: View>: View {
-    let content: Content
-    init(@ViewBuilder _ content: () -> Content) { self.content = content() }
-
-    var body: some View {
-        content
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.06)))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.primary.opacity(0.07), lineWidth: 1))
-    }
 }
 
 private struct Bar: View {
@@ -167,7 +156,7 @@ private struct Sparkline: View {
                 .stroke(color, style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
             }
         }
-        .frame(height: 34)
+        .frame(height: 30)
         .overlay(Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 1), alignment: .bottom)
     }
 
@@ -196,35 +185,11 @@ private struct Pill: View {
     }
 }
 
-private struct Tile: View {
-    let title: String
-    let value: String
-    let caption: String
-    let fraction: Double
-    let color: Color
+private struct SectionLabel: View {
+    let text: String
 
     var body: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title.uppercased()).font(.system(size: 9.5, weight: .semibold)).kerning(0.6).foregroundColor(.secondary)
-                Text(value).font(.system(size: 21, weight: .semibold, design: .rounded)).lineLimit(1).minimumScaleFactor(0.7)
-                Text(caption).font(.system(size: 10.5)).foregroundColor(.secondary).lineLimit(1)
-                Bar(fraction: fraction, color: color).padding(.top, 2)
-            }
-        }
-    }
-}
-
-private struct SectionTitle: View {
-    let icon: String
-    let title: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 11, weight: .medium)).foregroundColor(.secondary)
-            Text(title).font(.system(size: 12, weight: .semibold))
-            Spacer()
-        }
+        Text(text.uppercased()).font(.system(size: 10, weight: .semibold)).kerning(0.6).foregroundColor(.secondary)
     }
 }
 
@@ -258,22 +223,6 @@ private struct PillButtonStyle: ButtonStyle {
     }
 }
 
-private struct Orb: View {
-    let mode: MenuBarIcon.Mode
-    let memory: Double
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            Image(nsImage: MenuBarIcon.image(angle: t * mode.revolutionsPerSecond * 2 * .pi, pulse: (sin(t * 5) + 1) / 2,
-                                             memory: memory, mode: mode, size: 30))
-                .renderingMode(.template)
-                .foregroundColor(accent)
-        }
-        .frame(width: 30, height: 30)
-    }
-}
-
 // MARK: - Card
 
 struct MenuBarView: View {
@@ -286,55 +235,68 @@ struct MenuBarView: View {
     private var stats: MenuStats { model.stats }
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             header
-            modelCard
-            tiles
+            summary
             buttons
             if model.expanded { details }
         }
-        .padding(14)
+        .padding(16)
         .frame(width: Self.width)
         .fixedSize(horizontal: false, vertical: true)
+        .transaction { $0.animation = nil }
         .background(GeometryReader { Color.clear.preference(key: HeightKey.self, value: $0.size.height) })
         .onPreferenceChange(HeightKey.self) { onHeight($0) }
     }
 
-    // MARK: First click
+    // MARK: First click: status, model, memory
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Orb(mode: stats.iconMode, memory: stats.memory?.fraction ?? 0)
-            VStack(alignment: .leading, spacing: 1) {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Odysseus").font(.system(size: 15, weight: .semibold))
-                Text(verbatim: stats.serverUp ? "Running on :\(stats.port)" : "Server not running")
-                    .font(.system(size: 11)).foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Circle().fill(statusColor).frame(width: 7, height: 7)
+                    Text(verbatim: stats.serverUp ? "Running on :\(stats.port)" : "Server not running")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
             }
             Spacer()
-            statusPill
+            // Only worth a badge when something needs attention.
+            switch stats.iconMode {
+            case .warning: Pill(text: "Memory tight", color: .orange)
+            case .critical: Pill(text: "Memory critical", color: .red)
+            default: EmptyView()
+            }
         }
     }
 
-    private var statusPill: some View {
+    private var statusColor: Color {
         switch stats.iconMode {
-        case .off: return Pill(text: "Offline", color: .gray)
-        case .idle: return Pill(text: "Idle", color: .green)
-        case .loaded: return Pill(text: "Ready", color: .green)
-        case .busy: return Pill(text: "Working", color: accent)
-        case .warning: return Pill(text: "Memory tight", color: .orange)
-        case .critical: return Pill(text: "Memory critical", color: .red)
+        case .off: return .gray
+        case .busy: return accent
+        case .warning: return .orange
+        case .critical: return .red
+        default: return .green
         }
     }
 
-    private var modelCard: some View {
-        Card {
-            HStack(spacing: 10) {
-                Image(systemName: "cube.transparent").font(.system(size: 16)).foregroundColor(accent).frame(width: 22)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(modelTitle).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Text(modelCaption).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(modelTitle).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text(modelCaption).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Memory").font(.system(size: 12, weight: .medium))
+                    Spacer()
+                    Text(stats.memory.map { "\(StatsProvider.fmt($0.usedGB)) of \(StatsProvider.fmt($0.totalGB))" } ?? "unknown")
+                        .font(.system(size: 12)).monospacedDigit().foregroundColor(.secondary)
                 }
-                Spacer()
+                Bar(fraction: stats.memory?.fraction ?? 0, color: pressureColor(stats.memory))
+                Text("GPU \(percent(stats.gpuPercent)) · CPU \(percent(stats.cpuPercent))")
+                    .font(.system(size: 11)).foregroundColor(.secondary).monospacedDigit()
             }
         }
     }
@@ -351,29 +313,13 @@ struct MenuBarView: View {
         return StatsProvider.modelDetail(first)
     }
 
-    private var tiles: some View {
-        HStack(spacing: 8) {
-            Tile(title: "Memory",
-                 value: stats.memory.map { StatsProvider.fmt($0.usedGB).replacingOccurrences(of: " GB", with: "") } ?? "–",
-                 caption: stats.memory.map { "of \(StatsProvider.fmt($0.totalGB))" } ?? "unknown",
-                 fraction: stats.memory?.fraction ?? 0, color: pressureColor(stats.memory))
-            Tile(title: "GPU", value: percent(stats.gpuPercent), caption: stats.gpuPercent.map { $0 >= 20 ? "working" : "idle" } ?? "n/a",
-                 fraction: (stats.gpuPercent ?? 0) / 100, color: .teal)
-            Tile(title: "CPU", value: percent(stats.cpuPercent), caption: "load \(String(format: "%.1f", stats.load1))",
-                 fraction: (stats.cpuPercent ?? 0) / 100, color: .blue)
-        }
-    }
-
     private var buttons: some View {
         HStack(spacing: 8) {
-            Button("Open Odysseus", action: actions.open).buttonStyle(PillButtonStyle(primary: true))
-            Button(stats.chatModels.isEmpty ? "Unload" : "Unload (\(stats.chatModels.count))", action: actions.unload)
-                .buttonStyle(PillButtonStyle())
-                .disabled(stats.chatModels.isEmpty)
-                .opacity(stats.chatModels.isEmpty ? 0.45 : 1)
-            Spacer()
+            Button("Open", action: actions.open).buttonStyle(PillButtonStyle(primary: true))
+            Button("Optimise memory", action: actions.optimise).buttonStyle(PillButtonStyle())
+            Spacer(minLength: 0)
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { model.expanded.toggle() }
+                model.expanded.toggle()
             } label: {
                 HStack(spacing: 4) {
                     Text("Details")
@@ -384,16 +330,18 @@ struct MenuBarView: View {
         }
     }
 
-    // MARK: Details
+    // MARK: Details: plain sections, no boxes
 
     private var details: some View {
-        VStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
             modelsSection
-            hardwareSection
+            Divider()
             memorySection
+            Divider()
             systemSection
             HStack {
-                Button("Show server log", action: actions.log).buttonStyle(PillButtonStyle())
+                Button("Show log", action: actions.log).buttonStyle(PillButtonStyle())
                 Spacer()
                 Button("Quit Odysseus", action: actions.quit).buttonStyle(PillButtonStyle())
             }
@@ -401,78 +349,44 @@ struct MenuBarView: View {
     }
 
     private var modelsSection: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 6) {
-                SectionTitle(icon: "cube", title: "Models in memory")
-                if stats.models.isEmpty {
-                    Text(stats.runnerUp ? "None loaded" : "Model runner not reachable")
-                        .font(.system(size: 12)).foregroundColor(.secondary)
-                }
-                ForEach(stats.models, id: \.name) { m in
-                    HStack {
-                        Text(m.shortName).font(.system(size: 12)).lineLimit(1)
-                        Spacer()
-                        Text(StatsProvider.modelDetail(m)).font(.system(size: 11)).foregroundColor(.secondary)
-                    }
+        VStack(alignment: .leading, spacing: 6) {
+            SectionLabel(text: "Models in memory")
+            if stats.models.isEmpty {
+                Text(stats.runnerUp ? "None loaded" : "Model runner not reachable")
+                    .font(.system(size: 12)).foregroundColor(.secondary)
+            }
+            ForEach(stats.models, id: \.name) { m in
+                HStack {
+                    Text(m.shortName).font(.system(size: 12)).lineLimit(1)
+                    Spacer()
+                    Text(StatsProvider.modelDetail(m)).font(.system(size: 11)).foregroundColor(.secondary)
                 }
             }
-        }
-    }
-
-    private var hardwareSection: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionTitle(icon: "cpu", title: "Hardware usage")
-                metric("GPU", value: stats.gpuPercent, history: model.gpuHistory, color: .teal)
-                metric("CPU", value: stats.cpuPercent, history: model.cpuHistory, color: .blue)
-            }
-        }
-    }
-
-    private func metric(_ name: String, value: Double?, history: [Double], color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(name).font(.system(size: 12, weight: .medium))
-                Spacer()
-                Text(percent(value)).font(.system(size: 12, weight: .semibold)).monospacedDigit()
-            }
-            Sparkline(values: history, color: color)
         }
     }
 
     private var memorySection: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    SectionTitle(icon: "memorychip", title: "Memory")
-                    if let m = stats.memory { Pill(text: m.pressureName.capitalized, color: pressureColor(m)) }
-                }
-                if let m = stats.memory {
-                    HStack {
-                        Text("\(String(format: "%.1f", m.usedGB)) / \(String(format: "%.0f", m.totalGB)) GB")
-                            .font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                        Spacer()
-                        Text("\(Int((m.fraction * 100).rounded()))% used").font(.system(size: 11)).foregroundColor(.secondary)
-                    }
-                    Sparkline(values: model.memoryHistory, color: pressureColor(m))
-                    KeyValue(key: "Compressed", value: StatsProvider.fmt(m.compressedGB))
-                    KeyValue(key: "Cached files", value: StatsProvider.fmt(m.cachedGB))
-                    KeyValue(key: "Swap used", value: StatsProvider.fmt(m.swapUsedGB))
-                    KeyValue(key: "Available", value: StatsProvider.fmt(m.availableGB))
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                SectionLabel(text: "Memory")
+                Spacer()
+                if let m = stats.memory { Pill(text: m.pressureName.capitalized, color: pressureColor(m)) }
+            }
+            if let m = stats.memory {
+                Sparkline(values: model.memoryHistory, color: pressureColor(m))
+                KeyValue(key: "Swap used", value: StatsProvider.fmt(m.swapUsedGB))
+                KeyValue(key: "Available", value: StatsProvider.fmt(m.availableGB))
             }
         }
     }
 
     private var systemSection: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 6) {
-                SectionTitle(icon: "gauge", title: "System")
-                KeyValue(key: "Thermal state", value: stats.thermal)
-                KeyValue(key: "Up for", value: StatsProvider.uptimeText(stats.uptime))
-                if let note = stats.guardNote {
-                    Text(note).font(.system(size: 11)).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            SectionLabel(text: "System")
+            KeyValue(key: "Thermal state", value: stats.thermal)
+            KeyValue(key: "Up for", value: StatsProvider.uptimeText(stats.uptime))
+            if let note = stats.guardNote {
+                Text(note).font(.system(size: 11)).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -516,7 +430,7 @@ enum MenuBarPreview {
         let liveModel = MenuBarModel()
         liveModel.record(live)
 
-        let actions = MenuBarActions(open: {}, unload: {}, log: {}, quit: {})
+        let actions = MenuBarActions(open: {}, optimise: {}, log: {}, quit: {})
         for (name, model) in [("sample", busy), ("live", liveModel)] {
             for expanded in [false, true] {
                 model.expanded = expanded

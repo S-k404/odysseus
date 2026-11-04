@@ -294,6 +294,20 @@ enum StatsProvider {
         return names.count
     }
 
+    /// "Optimise memory": ask the server to free what Odysseus can (models, the decensor model);
+    /// if it isn't answering, unload the chat models directly. Returns a short line to show.
+    @discardableResult
+    static func optimise(port: Int, model: String = "") -> String {
+        let body = try? JSONSerialization.data(withJSONObject: ["model": model])
+        if let report = httpJSON("http://127.0.0.1:\(port)/api/local-models/optimize", method: "POST", body: body, timeout: 60) as? [String: Any],
+           let steps = report["steps"] as? [String] {
+            if let freed = report["freed_gb"] as? Double, freed >= 0.1 { return "Freed \(fmt(freed))" }
+            return steps.isEmpty ? "Nothing to free" : "Unloaded \(steps.count) item(s)"
+        }
+        let count = unloadAll()
+        return count == 0 ? "Nothing to free" : "Unloaded \(count) model(s)"
+    }
+
     // MARK: HTTP
 
     static func httpJSON(_ url: String, method: String = "GET", body: Data? = nil, timeout: TimeInterval = 2.0) -> Any? {
@@ -376,11 +390,13 @@ enum StatsProvider {
     }
 
     /// The right-click menu: quick actions only (the details live in the card).
-    static func rows(for stats: MenuStats, unload: Selector, open: Selector, log: Selector, quit: Selector) -> [MenuRow] {
+    static func rows(for stats: MenuStats, optimise: Selector, open: Selector, log: Selector, quit: Selector,
+                     freeMore: Selector? = nil) -> [MenuRow] {
         var rows: [MenuRow] = []
         rows.append(.header(stats.serverUp ? "Odysseus  ● running on :\(stats.port)" : "Odysseus  ○ server not running"))
         rows.append(.separator)
-        rows.append(.action(stats.chatModels.isEmpty ? "Unload all models" : "Unload all models (\(stats.chatModels.count))", unload))
+        rows.append(.action("Optimise memory", optimise))
+        if let freeMore = freeMore { rows.append(.action("Free more memory…", freeMore)) }
         rows.append(.action("Open Odysseus", open))
         rows.append(.action("Show server log", log))
         rows.append(.separator)
@@ -400,7 +416,7 @@ enum StatsProvider {
 
 struct MenuBarActions {
     let open: () -> Void
-    let unload: () -> Void
+    let optimise: () -> Void
     let log: () -> Void
     let quit: () -> Void
 }
@@ -467,7 +483,7 @@ final class MenuBarStats: NSObject {
 
         let actions = MenuBarActions(
             open: { [weak self] in self?.closePopover(); self?.onOpen() },
-            unload: { [weak self] in self?.unloadAll() },
+            optimise: { [weak self] in self?.optimise() },
             log: { [weak self] in self?.showLog() },
             quit: { [weak self] in self?.quitApp() }
         )
@@ -476,7 +492,7 @@ final class MenuBarStats: NSObject {
         })
         popover.contentViewController = controller
         popover.behavior = .transient
-        popover.animates = true
+        popover.animates = false  // the icon animates; opening the card should just appear
         popover.contentSize = NSSize(width: MenuBarView.width, height: 260)
 
         sample()
@@ -599,8 +615,9 @@ final class MenuBarStats: NSObject {
 
     private func showQuickMenu(from button: NSStatusBarButton) {
         let menu = NSMenu()
-        for row in StatsProvider.rows(for: model.stats, unload: #selector(unloadAllFromMenu), open: #selector(openFromMenu),
-                                      log: #selector(showLogFromMenu), quit: #selector(quitFromMenu)) {
+        for row in StatsProvider.rows(for: model.stats, optimise: #selector(optimiseFromMenu), open: #selector(openFromMenu),
+                                      log: #selector(showLogFromMenu), quit: #selector(quitFromMenu),
+                                      freeMore: #selector(freeMoreFromMenu)) {
             switch row {
             case .separator:
                 menu.addItem(.separator())
@@ -637,8 +654,9 @@ final class MenuBarStats: NSObject {
 
     private func writeDebugNow(to path: String) {
         let button = statusItem.button
-        let menuRows = StatsProvider.rows(for: model.stats, unload: #selector(unloadAllFromMenu), open: #selector(openFromMenu),
-                                          log: #selector(showLogFromMenu), quit: #selector(quitFromMenu))
+        let menuRows = StatsProvider.rows(for: model.stats, optimise: #selector(optimiseFromMenu), open: #selector(openFromMenu),
+                                          log: #selector(showLogFromMenu), quit: #selector(quitFromMenu),
+                                          freeMore: #selector(freeMoreFromMenu))
         let popoverWindow = popover.contentViewController?.view.window
         let info: [String: Any] = [
             "visible": button?.window?.isVisible ?? false,
@@ -664,10 +682,33 @@ final class MenuBarStats: NSObject {
 
     // MARK: Actions
 
-    private func unloadAll() {
+    private func optimise() {
+        let port = self.port
         runnerQueue.async { [weak self] in
-            StatsProvider.unloadAll()
+            StatsProvider.optimise(port: port)
             DispatchQueue.main.async { self?.sample() }
+            self?.offerToQuitApps(automatic: true)
+        }
+    }
+
+    /// The part of freeing memory that Optimise leaves alone: ask which other apps to quit (MemoryFreer.swift).
+    /// After Optimise (`automatic`) it only asks while memory is still tight; from the menu it always asks.
+    private func offerToQuitApps(automatic: Bool) {
+        runnerQueue.async { [weak self] in
+            if automatic { Thread.sleep(forTimeInterval: 1.5) }  // let the unloaded models' RAM come back before judging
+            let memory = StatsProvider.readMemory()
+            if automatic && !MemoryFreer.isTight(memory) { return }
+            let apps = MemoryFreer.heavyApps()
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if apps.isEmpty {
+                    if !automatic { MemoryFreer.nothingToOffer() }
+                    return
+                }
+                if MemoryFreer.offer(apps, memory: memory) > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.sample() }
+                }
+            }
         }
     }
 
@@ -675,7 +716,8 @@ final class MenuBarStats: NSObject {
 
     private func quitApp() { onQuit() }
 
-    @objc private func unloadAllFromMenu() { unloadAll() }
+    @objc private func optimiseFromMenu() { optimise() }
+    @objc private func freeMoreFromMenu() { offerToQuitApps(automatic: false) }
     @objc private func openFromMenu() { onOpen() }
     @objc private func showLogFromMenu() { showLog() }
     @objc private func quitFromMenu() { quitApp() }
