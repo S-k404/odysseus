@@ -539,6 +539,12 @@ _DOMAIN_RULES = {
     "pubmed": """\
 ## PubMed Biomedical Research rules
 - Use PubMed tools to search biomedical, clinical, and life science publications, and retrieve abstracts and metadata using PMIDs.""",
+    "weather": """\
+## Weather rules
+- Use `mcp__weather__get_weather` for current weather and daily forecasts and `mcp__weather__get_hourly_forecast` for "when will it rain" or a given hour. Prefer them to a web search: they return metric values (°C, km/h, mm, hPa, km, 24-hour time).
+- Report the numbers exactly as returned. Never convert to °F, mph or inches, and never switch to 12-hour times.
+- Pass the place the user named ("Pune", "Paris, France", or "lat,lon"). If they named none, ask which city instead of guessing.
+- If the result lists other places with the same name, say which one you used.""",
     "github": """\
 ## GitHub rules
 - Use GitHub tools to search repositories, inspect file contents, and list issues or PRs.""",
@@ -584,6 +590,7 @@ _DOMAIN_TOOL_MAP = {
     "obsidian": {"mcp__obsidian__manage_obsidian"},
     "blender": {"mcp__blender__blender_get_info", "mcp__blender__blender_execute_code", "mcp__blender__blender_get_scene_summary", "mcp__blender__blender_render_thumbnail"},
     "pubmed": {"mcp__pubmed__pubmed_search", "mcp__pubmed__pubmed_get_abstract"},
+    "weather": {"mcp__weather__get_weather", "mcp__weather__get_hourly_forecast"},
     "github": {"mcp__github__github_search_repos", "mcp__github__github_get_file_contents", "mcp__github__github_list_issues"},
     "coursera": {"mcp__coursera__coursera_search_courses", "mcp__coursera__coursera_get_course_details"},
     "canva": {"mcp__canva__canva_get_format_specs", "mcp__canva__canva_generate_color_palette", "mcp__canva__canva_suggest_layout"},
@@ -607,7 +614,7 @@ _WORKSPACE_TERMINUS_TOOLS = (
 _TERMINUS_PRESERVED_DOMAINS = (
     "documents", "email", "notes_calendar_tasks", "ui", "sessions",
     "notion", "obsidian", "blender", "pubmed", "github", "coursera", "canva", "figma", "cloudflare", "gdrive",
-    "reverse_engineering",
+    "reverse_engineering", "weather",
 )
 _TERMINUS_PRESERVED_TOOLS = set().union(
     *(_DOMAIN_TOOL_MAP[_d] for _d in _TERMINUS_PRESERVED_DOMAINS)
@@ -1538,6 +1545,15 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
         domains.add("documents")
     if has(r"\b(search|web|google|look up|latest|news|current|weather|forecast|stock price|price of|website|url|https?://|www\.)\b"):
         domains.add("web")
+    # Weather (the weather MCP server): metric forecasts, where a web search returns whatever units the page uses.
+    if has(
+        r"\b(?:weather|forecast)\b",
+        r"\b(?:will|is|does|going to)\b.{0,20}\b(?:rain|snow|drizzle|storm)\b",
+        r"\b(?:rain|raining|snow|storm|temperature|humidity|wind(?:y)?)\b.{0,30}\b(?:today|tonight|tomorrow|right now|outside|this (?:week|weekend|evening|morning|afternoon))\b",
+        r"\bhow (?:hot|cold|warm) is it\b",
+        r"\bumbrella\b",
+    ):
+        domains.add("weather")
     if has(
         r"\b(wyszukaj|wyszukać|wyszukac)\b.*\b(internet|internecie|online|web)\b",
         r"\b(sprawd[zź]|znajd[zź])\b.*\b(internet|internecie|online|web)\b",
