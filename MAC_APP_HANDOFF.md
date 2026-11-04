@@ -163,6 +163,11 @@ scripts/dev/scratch_server.sh stop
   the guard in `src/llm_core.py`. "Optimise memory" (`src/ram_optimizer.py`) only
   frees what Odysseus owns; its "biggest apps" list ranks by `top` footprint, because
   `ps` resident size hides compressed memory (it showed Docker's VM as 1.9 GB, not 6.6).
+  The menu bar's "Free more memory…" (right-click menu, `swift/MemoryFreer.swift`; also offered
+  after Optimise while memory is still tight) is the only step that touches other apps: it lists the
+  biggest ones (footprint of the app plus its helper processes) with unticked boxes and sends a polite
+  quit to the ticked ones. Terminals, Docker, IDEs, Claude and Odysseus are never listed
+  (`MemoryFreer.protected`). `Odysseus --menubar-heavy-apps` prints the list without any UI.
 
 - "The Odysseus server stopped during startup" with an unhelpful log: look for
   `DataDirInUse` in `logs/odysseus-app.log` and check `data/.server-instance.json`
