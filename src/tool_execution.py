@@ -694,6 +694,9 @@ async def _call_mcp_tool(
     server_id, tool_name = _MCP_TOOL_MAP[tool]
     qualified = f"mcp__{server_id}__{tool_name}"
     args = _build_mcp_args(tool, content)
+    # An image model is about to load: make room first (a no-op when there is enough memory).
+    from src.ram_optimizer import ensure_ram_for_tool
+    await ensure_ram_for_tool(qualified)
     result = await mcp.call_tool(qualified, args)
 
     # If MCP server not connected, try direct fallback
@@ -1321,6 +1324,9 @@ async def _execute_tool_block_impl(
                 if tool.startswith("mcp__email__") and owner:
                     args = dict(args)
                     args[_EMAIL_MCP_OWNER_ARG] = owner
+                # A specialist model (video, neural music) is about to load: make room first.
+                from src.ram_optimizer import ensure_ram_for_tool
+                await ensure_ram_for_tool(tool)
                 result = await mcp.call_tool(tool, args)
         else:
             desc = f"mcp: {tool}"

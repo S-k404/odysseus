@@ -152,6 +152,13 @@ async def _unload_other_local_models(url: str, model: str) -> List[str]:
     return await unload_other_runner_models(url, model) + await unload_other_ollama_models(url, model)
 
 
+async def _load_block_reason_after_freeing(target_url: str, model: str) -> Optional[str]:
+    # ram_optimizer imports this module, so it is imported late.
+    from src.ram_optimizer import load_block_reason_after_freeing
+    # Passed in (not imported there) so the guard can be replaced in one place.
+    return await load_block_reason_after_freeing(target_url, model, check=load_block_reason)
+
+
 async def release_local_models(endpoint_urls: List[str], keep: str = "") -> Dict[str, object]:
     """Unload Docker Model Runner and Ollama models other than ``keep`` right away.
 
@@ -2567,8 +2574,9 @@ async def llm_call_async(
 
     if _is_host_dead(target_url):
         raise HTTPException(503, f"Upstream {_host_key(target_url)} marked unreachable (cooldown active)")
-    # Refuse local models whose backend would grab most of the Mac's RAM.
-    blocked = await asyncio.to_thread(load_block_reason, target_url, model)
+    # Refuse local models whose backend would grab most of the Mac's RAM,
+    # after freeing what Odysseus can.
+    blocked = await _load_block_reason_after_freeing(target_url, model)
     if blocked:
         raise HTTPException(409, blocked)
 
@@ -2732,8 +2740,9 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
                      tool_choice_none: bool = False, workload: str = "foreground",
                      reasoning_effort: Optional[str] = None, thinking_budget: Optional[int] = None):
     target_url = _stream_target_url(url)
-    # Refuse local models whose backend would grab most of the Mac's RAM.
-    blocked = await asyncio.to_thread(load_block_reason, target_url, model)
+    # Refuse local models whose backend would grab most of the Mac's RAM,
+    # after freeing what Odysseus can.
+    blocked = await _load_block_reason_after_freeing(target_url, model)
     if blocked:
         yield f'event: error\ndata: {json.dumps({"error": blocked, "status": 409})}\n\n'
         return

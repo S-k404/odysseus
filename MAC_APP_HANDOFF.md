@@ -157,7 +157,12 @@ scripts/dev/scratch_server.sh stop
   item is on screen and its menu. To try a build without touching real data, run a
   copy with `ODYSSEUS_PORT=7899 ODYSSEUS_DATA_DIR=/tmp/x AUTH_ENABLED=false`.
 - Memory knobs: `ODYSSEUS_RAM_GUARD=0` (allow any load), `ODYSSEUS_MEMORY_GUARD=0`
-  (no watchdog). Loop knobs live at the top of the guard in `src/llm_core.py`.
+  (no watchdog), `ODYSSEUS_RAM_RESERVE_GB` (GB the load guard keeps for macOS and
+  other apps; default 10% of RAM, at least 4; `0` uses every free byte, a negative
+  value such as `-4` also accepts that much swapping). Loop knobs live at the top of
+  the guard in `src/llm_core.py`. "Optimise memory" (`src/ram_optimizer.py`) only
+  frees what Odysseus owns; its "biggest apps" list ranks by `top` footprint, because
+  `ps` resident size hides compressed memory (it showed Docker's VM as 1.9 GB, not 6.6).
 
 - "The Odysseus server stopped during startup" with an unhelpful log: look for
   `DataDirInUse` in `logs/odysseus-app.log` and check `data/.server-instance.json`

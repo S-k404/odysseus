@@ -86,6 +86,39 @@ def test_load_that_fits_is_allowed(monkeypatch):
     assert dmr.ram_block_reason(URL, "big:35b") is None
 
 
+def test_refusal_says_how_short_it_is_and_how_to_let_models_use_more(monkeypatch):
+    _setup(monkeypatch, available=11.5)
+    reason = dmr.ram_block_reason(URL, "big:35b")
+    # needs ~17.4 GB, 11.5 free less the 4.8 GB reserve = 6.7 spare
+    assert "11 GB short" in reason and "ODYSSEUS_RAM_RESERVE_GB (now 5)" in reason
+
+
+def test_the_reserve_defaults_to_ten_percent_of_ram_but_at_least_four_gb(monkeypatch):
+    monkeypatch.delenv("ODYSSEUS_RAM_RESERVE_GB", raising=False)
+    assert dmr.ram_reserve_gb(48.0) == pytest.approx(4.8)
+    assert dmr.ram_reserve_gb(16.0) == 4.0
+
+
+def test_a_smaller_reserve_lets_a_model_use_more_of_the_mac(monkeypatch):
+    _setup(monkeypatch, available=18.0)  # 18 free: the ~17.4 GB model misses by the 4.8 GB reserve
+    assert dmr.ram_block_reason(URL, "big:35b")
+    monkeypatch.setenv("ODYSSEUS_RAM_RESERVE_GB", "0")
+    assert dmr.ram_block_reason(URL, "big:35b") is None
+
+
+def test_a_negative_reserve_accepts_some_swapping(monkeypatch):
+    _setup(monkeypatch, available=14.0)
+    monkeypatch.setenv("ODYSSEUS_RAM_RESERVE_GB", "0")
+    assert dmr.ram_block_reason(URL, "big:35b")
+    monkeypatch.setenv("ODYSSEUS_RAM_RESERVE_GB", "-4")
+    assert dmr.ram_block_reason(URL, "big:35b") is None
+
+
+def test_an_unreadable_reserve_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_RAM_RESERVE_GB", "lots")
+    assert dmr.ram_reserve_gb(48.0) == pytest.approx(4.8)
+
+
 def test_footprint_includes_the_kv_cache_read_from_the_model_metadata():
     # qwen3-8b: 36 layers, 8 KV heads, 128-wide heads, served at 32k -> ~4.5 GB of KV cache.
     gguf = {"qwen3.block_count": "36", "qwen3.attention.head_count_kv": "8", "qwen3.attention.key_length": "128"}
@@ -111,6 +144,24 @@ def test_other_resident_models_are_counted_as_reclaimable(monkeypatch):
     # 8 GB free, but the 17 GB model in memory is unloaded before this one loads.
     _setup(monkeypatch, available=8.0, resident=["other:30b"])
     assert dmr.ram_block_reason(URL, "big:35b") is None
+
+
+def test_evicting_a_loaded_model_credits_its_kv_cache_not_just_its_file(monkeypatch):
+    # qwen3-8b: a 4.68 GiB file, but ~10.7 GB in memory at 32k (36 layers, 8 KV heads, 128-wide heads).
+    gguf = {"qwen3.block_count": "36", "qwen3.attention.head_count_kv": "8", "qwen3.attention.key_length": "128"}
+    entries = [_entry("big:35b", "14.29GiB"),
+               {"id": "sha256:small:8b", "tags": ["small:8b"], "config": {"format": "gguf", "size": "4.68GiB", "gguf": gguf}}]
+    _setup(monkeypatch, available=12.0, resident=["small:8b"])
+    monkeypatch.setattr(dmr, "_runner_models", lambda url, timeout=3.0: entries)
+    monkeypatch.setattr(dmr, "runner_context_size", lambda url, model, timeout=3.0: 32768 if model == "small:8b" else None)
+    # 12 free + ~10.7 handed back - 4.8 reserve = ~17.9 spare for a ~17.4 GB model. Counting only
+    # the file (1.15 x 4.68 = 5.4 GB) gave 12.6 and refused it.
+    assert dmr.ram_block_reason(URL, "big:35b") is None
+    # With less free memory it is still refused, so the credit is not unlimited.
+    _setup(monkeypatch, available=8.0, resident=["small:8b"])
+    monkeypatch.setattr(dmr, "_runner_models", lambda url, timeout=3.0: entries)
+    monkeypatch.setattr(dmr, "runner_context_size", lambda url, model, timeout=3.0: 32768 if model == "small:8b" else None)
+    assert dmr.is_ram_reason(dmr.ram_block_reason(URL, "big:35b"))
 
 
 def test_a_model_that_is_already_loaded_is_never_refused(monkeypatch):
