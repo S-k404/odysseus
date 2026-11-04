@@ -1181,6 +1181,13 @@ _ADMIN_KEYWORDS = [
     "note", "notes", "todo", "todos", "reminder", "reminders",
 ]
 
+# Keywords are matched as substrings, so the admin keyword "doc" fires inside "docker",
+# "doctor" and "doctrine". A docker question then switched on admin mode and offered
+# manage_tokens, manage_settings, manage_mcp and the rest to a model that only had to
+# list containers. These words are blanked out before the scan.
+_ADMIN_KEYWORD_FALSE_FRIENDS_RE = re.compile(r"\b(?:docker|doctor|doctrine)\w*")
+
+
 def _detect_admin_intent(messages: List[Dict]) -> bool:
     """Check if the last user message suggests admin/management tool usage."""
     for msg in reversed(messages):
@@ -1188,7 +1195,7 @@ def _detect_admin_intent(messages: List[Dict]) -> bool:
             content = msg.get("content", "")
             if isinstance(content, list):
                 content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
-            content_lower = content.lower()
+            content_lower = _ADMIN_KEYWORD_FALSE_FRIENDS_RE.sub(" ", content.lower())
             return any(kw in content_lower for kw in _ADMIN_KEYWORDS)
     return False
 
