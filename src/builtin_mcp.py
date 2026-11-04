@@ -89,6 +89,7 @@ _BUILTIN_SERVERS = {
     "figma":           ("mcp_servers/figma_server.py",          "Built-in: Figma Design"),
     "cloudflare":      ("mcp_servers/cloudflare_server.py",     "Built-in: Cloudflare Developer Platform"),
     "gdrive":          ("mcp_servers/gdrive_server.py",         "Built-in: Google Drive"),
+    "weather":         ("mcp_servers/weather_server.py",        "Built-in: Weather (metric, Open-Meteo)"),
     "cad_maker":       ("mcp_servers/cad_maker_server.py",       "Built-in: 3D CAD & Parametric Enclosure Maker"),
     "pcb_maker":       ("mcp_servers/pcb_maker_server.py",       "Built-in: KiCad & JLCPCB PCB Maker"),
     "computer_use":    ("mcp_servers/computer_use_server.py",   "Built-in: Computer Use & Screen Recording"),
