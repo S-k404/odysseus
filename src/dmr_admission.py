@@ -106,10 +106,13 @@ def _get_json(url: str, timeout: float = 3.0):
         return json.load(r)
 
 
-def _post_json(url: str, body: dict, timeout: float = 60.0) -> None:
+def _post_json(url: str, body: dict, timeout: float = 60.0) -> object:
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        r.read()
+        try:
+            return json.loads(r.read())
+        except Exception:
+            return {}
 
 
 def _context(upstream: str, models: List[dict], name: str, get: Callable[..., object]) -> Optional[int]:
@@ -129,6 +132,7 @@ def _context(upstream: str, models: List[dict], name: str, get: Callable[..., ob
 
 def _settle(snapshot: Callable[[], Optional[Dict[str, object]]], sleep: Callable[[float], None]) -> None:
     """Wait until memory stops coming back: a model's RAM returns when its runner process exits."""
+    sleep(1.0)
     last = snapshot()
     for _ in range(SETTLE_TRIES):
         if not last:
@@ -140,6 +144,7 @@ def _settle(snapshot: Callable[[], Optional[Dict[str, object]]], sleep: Callable
         quiet = float(last["used_gb"]) - float(now["used_gb"]) < SETTLE_QUIET_GB
         last = now
         if quiet:
+            sleep(0.5)
             return
 
 
@@ -172,10 +177,19 @@ def gate(
                 return d.message
             if d.action == "make_room":
                 if unloads >= 2:
-                    return None  # the runner will not let go; do not hold the request hostage
+                    if clock() >= deadline:
+                        return f"Cannot load {model}: previous model(s) ({', '.join(d.unload)}) could not be unloaded."
+                    sleep(POLL_S)
+                    continue
                 unloads += 1
                 logger.info("[dmr-admission] unloading %s before loading %s", ", ".join(d.unload), model)
-                post(f"{upstream}/engines/unload", {"models": d.unload})
+                res = post(f"{upstream}/engines/unload", {"models": d.unload})
+                if isinstance(res, dict) and res.get("unloaded_runners") == 0:
+                    # Model is currently busy generating; wait for it rather than failing open
+                    if clock() >= deadline:
+                        return f"{', '.join(d.unload)} is still generating and {model} needs its memory; try again in a moment."
+                    sleep(POLL_S)
+                    continue
                 _settle(snapshot, sleep)
                 continue
             if clock() >= deadline:  # wait
