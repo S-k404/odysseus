@@ -36,7 +36,8 @@ import {
 } from './chatModelProvenance.js';
 import { createTerminalStreamError, isRecoverableStreamError } from './chatStreamErrors.js';
 import { loadPanel } from './panels.js';
-import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens } from './modelPicker.js';
+import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens, listChatModels, switchToModel } from './modelPicker.js';
+import { autoRouteBeforeSend, autoRouteAfterTurn, autoRouteEnabled } from './autoRoute.js';
 
   const RESEARCH_TIMEOUT_MS = 360000;
   const DEFAULT_TIMEOUT_MS = 120000;
@@ -945,6 +946,17 @@ import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens 
 
 	  function _attachPlanActions(target, plan) {
 	    if (!target || !String(plan || '').trim() || target.querySelector('.plan-inline-actions')) return;
+	    // Show the proposal as a card (header, steps, actions) so it reads as a plan awaiting approval.
+	    const planBody = target.querySelector('.body');
+	    if (planBody && !planBody.classList.contains('plan-card-body')) {
+	      planBody.classList.add('plan-card-body');
+	      const header = document.createElement('div');
+	      header.className = 'plan-card-header';
+	      header.innerHTML = `
+	        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>
+	        <strong>Proposed plan</strong><span>Nothing has run yet. Review it, then execute.</span>`;
+	      planBody.insertBefore(header, planBody.firstChild);
+	    }
 	    const actions = document.createElement('div');
 	    actions.className = 'plan-inline-actions';
 	    actions.innerHTML = `
@@ -952,14 +964,33 @@ import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens 
 	        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><polygon points="7 4 20 12 7 20 7 4"></polygon></svg>
 	        Execute
 	      </button>
+	      <select class="plan-inline-executor" title="Hand the plan to a specific model. It loads only now; the planning model is unloaded first."></select>
+	      <button type="button" class="plan-inline-revise">Keep planning</button>
 	      <button type="button" class="plan-inline-clear">Clear</button>`;
-	    actions.querySelector('.plan-inline-execute')?.addEventListener('click', () => {
+	    // "Run with": the model that planned, or any other chat model. Nothing loads until Execute.
+	    const executorSelect = actions.querySelector('.plan-inline-executor');
+	    const executors = (listChatModels ? listChatModels() : []).filter(m => !m.stale && !m.offline);
+	    executorSelect.add(new Option(autoRouteEnabled() ? 'Run with: automatic' : 'Run with: same model', ''));
+	    executors.forEach((m, i) => executorSelect.add(new Option('Run with: ' + m.display, String(i))));
+	    if (!executors.length) executorSelect.hidden = true;
+	    actions.querySelector('.plan-inline-execute')?.addEventListener('click', async () => {
 	      const approved = _getStoredPlan() || _extractPlanText(plan);
 	      if (!approved.trim()) return;
+	      const chosen = executorSelect.value === '' ? null : executors[Number(executorSelect.value)];
+	      if (chosen) {
+	        // Hand off: switch the chat to the specific model (this unloads the planner), then run the plan on it.
+	        try { await switchToModel(chosen); } catch (_) { uiModule.showError('Could not switch to ' + chosen.display); return; }
+	        if (window.__odysseusModelSwitchPromise) { try { await window.__odysseusModelSwitchPromise; } catch (_) {} }
+	      }
 	      _pendingApprovedPlan = approved;
 	      if (window.__odysseusSetPlanMode) window.__odysseusSetPlanMode(false);
 	      if (window.__odysseusSetChatMode) window.__odysseusSetChatMode('agent');
 	      _setComposerAndSend('Execute the approved plan.');
+	    });
+	    actions.querySelector('.plan-inline-revise')?.addEventListener('click', () => {
+	      // Stay in plan mode and let the user say what to change; the next message revises the plan.
+	      const box = el('message');
+	      if (box) { box.placeholder = 'What should change in the plan?'; box.focus(); }
 	    });
 	    actions.querySelector('.plan-inline-clear')?.addEventListener('click', () => {
 	      _clearStoredPlan();
@@ -1477,6 +1508,42 @@ import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens 
     _streamSessionId = streamSessionId;
     _sendInFlight = false;
 
+    // Auto-switch: move to the model that fits this message (picture, plan, tools) before it is sent.
+    try {
+      const _routeToggles = Storage.loadToggleState();
+      // The picker records a switch at once; the session list can lag behind it, and a brand-new chat is not in
+      // the list yet. So this chat's own latest pick wins, then the session's model, then any pick.
+      const _lastPick = window.__odysseusLastPickedRoute;
+      const _routeSid = sessionModule.getCurrentSessionId ? sessionModule.getCurrentSessionId() : '';
+      const _sessionModel = sessionModule.getCurrentModel ? sessionModule.getCurrentModel() : '';
+      const _routeModel = (_lastPick && _lastPick.model && _lastPick.session_id && _lastPick.session_id === _routeSid)
+        ? _lastPick.model : (_sessionModel || (_lastPick && _lastPick.model) || '');
+      if (!approvalForSend && !(el('research-toggle') && el('research-toggle').checked)) {
+        const _routed = await autoRouteBeforeSend({
+          message: msg,
+          currentModel: _routeModel,
+          mode: _routeToggles.mode || 'chat',
+          planMode: !!_routeToggles.plan_mode,
+          approvedPlan: !!_pendingApprovedPlan,
+          hasImage: (fileHandlerModule.getPendingInfo ? fileHandlerModule.getPendingInfo() : [])
+            .some(f => /^image\//.test(f.mime || '') || !!f.previewUrl),
+          // The picture this chat made, handed over when the message is about it (no model switch for a question).
+          attach: (file) => fileHandlerModule.addFiles([file], { skipCrop: true }),
+          attachedNames: (fileHandlerModule.getPendingInfo ? fileHandlerModule.getPendingInfo() : []).map(f => f.name),
+          chatId: _routeSid,
+        });
+        // The route to send to was captured before the switch, and the server honours it over the session's model:
+        // point it at the model we just switched to, or this very message would still go to the old one.
+        const _switched = _routed && _routed.switch && window.__odysseusLastPickedRoute;
+        if (_switched) {
+          Object.assign(selectedRouteForSend, {
+            model: _switched.model || '',
+            endpoint_url: _switched.endpoint_url || '',
+            endpoint_id: _switched.endpoint_id || '',
+          });
+        }
+      }
+    } catch (_) {}
     try {
       const pendingSwitch = window.__odysseusModelSwitchPromise;
       if (pendingSwitch && typeof pendingSwitch.then === 'function') {
@@ -4219,9 +4286,11 @@ import { getThinkingEffort, getThinkingBudget, getContextMode, getContextTokens 
         if (!footerTarget.querySelector('.msg-footer')) {
           footerTarget.appendChild(createMsgFooter(footerTarget));
         }
-        if (_generatedImagesForTurn.length && !_isBg) {
+        if (_generatedImagesForTurn.length && !_isBgFinal) {
           _generatedImagesForTurn.forEach(imgData => _appendGeneratedImageBubble(imgData));
         }
+        // The picture is done: leave the image model (it can only draw) for the text model the chat was on.
+        autoRouteAfterTurn().catch(() => {});
         // Add "View Report" link for completed research
         if (_researchingStreamIds.has(streamSessionId)) {
           _appendViewReportLink(footerTarget, streamSessionId);

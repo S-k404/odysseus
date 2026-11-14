@@ -253,7 +253,8 @@ def test_runaway_thinking_is_retried_without_thinking(monkeypatch):
 def test_retry_nudges_models_that_have_no_thinking_switch(monkeypatch):
     _, client = _run(monkeypatch, [_looping_reasoning(), _answer()])
     assert client.payloads[1]["presence_penalty"] == 1.0
-    assert "presence_penalty" not in client.payloads[0]
+    # The first request already carries the mild default that helps prevent the loop; the retry is stronger.
+    assert client.payloads[0]["presence_penalty"] == llm_core._LOCAL_THINKING_PRESENCE_PENALTY < 1.0
 
 
 def test_gpt_oss_is_asked_for_low_effort_not_none(monkeypatch):
@@ -288,3 +289,38 @@ def test_anthropic_loop_is_stopped_with_an_error(monkeypatch):
 
     assert "event: error" in blob and "started repeating itself" in blob
     assert len(client.payloads) == 1
+
+
+# ── prevention: stop loops early, and don't think when there is nothing to think about ──────────
+
+def test_one_sentence_said_again_and_again_is_caught_within_a_dozen_sentences():
+    guard = llm_core._DegenerateStreamGuard("qwen3.6")
+    text = "Let me look at what was asked. " + "I will write the response now. I need a short reply. " * 6
+    hit = _feed(guard, text)
+
+    assert hit and guard.thinking_loop and "repeated" in hit
+    assert guard.thinking_chars < 400  # not the thousand-plus characters the 40-sentence window needed
+
+
+def test_ordinary_reasoning_with_a_repeated_phrase_is_not_a_loop():
+    guard = llm_core._DegenerateStreamGuard("qwen3.6")
+    text = ("The user wants a list. I should check the first item. Then I should check the second item. "
+            "The first item is fine. The second item needs a fix. I should check the third item. "
+            "The third item is fine. I should write the answer now. The answer should be short. "
+            "I should check the first item once more. It is fine. Now I can answer.")
+    assert _feed(guard, text) is None
+
+
+def test_local_thinking_models_get_a_mild_repetition_penalty_unless_the_request_sets_one():
+    payload = {"model": "qwen3-8b", "messages": []}
+    llm_core._apply_local_anti_loop(payload, URL, "huggingface.co/unsloth/qwen3-8b-gguf:Q4_K_M")
+    assert payload["presence_penalty"] == 0.5
+
+    own = {"presence_penalty": 1.2}
+    llm_core._apply_local_anti_loop(own, URL, "qwen3-8b")
+    assert own["presence_penalty"] == 1.2  # a preset's own value wins
+
+    for url, model in ((URL, "llama3.1-8b"), ("https://api.openai.com/v1", "qwen3-8b")):
+        other = {}
+        llm_core._apply_local_anti_loop(other, url, model)
+        assert "presence_penalty" not in other, (url, model)  # no thinking, or not a local server

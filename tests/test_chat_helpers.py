@@ -439,6 +439,56 @@ def test_auto_name_session_passes_session_fallback_to_task_resolver(monkeypatch)
     assert updates == [("session-1", "Focused Fix")]
 
 
+def _name_with_model_error(monkeypatch, error, name="qwen3.6-35b 8:58:10 PM", message="Plan a small Python function that checks whether a number is prime."):
+    import src.llm_core as llm_core
+    import src.task_endpoint as task_endpoint
+
+    async def failing_llm_call(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(task_endpoint, "resolve_task_endpoint", lambda url=None, model=None, headers=None, owner=None: (url, model, headers))
+    monkeypatch.setattr(llm_core, "llm_call_async", failing_llm_call)
+    sess = SimpleNamespace(id="s1", owner=None, name=name, endpoint_url="http://x/v1", model="m", headers={},
+                           history=[SimpleNamespace(role="user", content=message)])
+    updates = []
+    manager = SimpleNamespace(update_session_name=lambda sid, title: updates.append((sid, title)))
+    asyncio.run(auto_name_session(manager, sess))
+    return updates
+
+
+def test_when_the_model_is_refused_the_chat_is_titled_from_its_first_words_without_an_error(monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.WARNING)
+
+    updates = _name_with_model_error(monkeypatch, HTTPException(409, "needs about 18 GB of memory, but only about 15 GB can be spared"))
+
+    assert updates == [("s1", "Plan a small Python function that")]
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]  # one warning line, no traceback
+    assert any("skipped" in r.getMessage() for r in caplog.records)
+
+
+def test_an_unexpected_failure_is_still_an_error_but_the_chat_still_gets_a_title(monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.WARNING)
+
+    updates = _name_with_model_error(monkeypatch, RuntimeError("boom"))
+
+    assert updates == [("s1", "Plan a small Python function that")]
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_a_chat_the_user_already_named_is_not_renamed_by_the_fallback(monkeypatch):
+    assert _name_with_model_error(monkeypatch, HTTPException(409, "refused"), name="Prime number checker") == []
+
+
+def test_fallback_title_is_short_clean_and_never_empty_text():
+    from routes.chat_helpers import fallback_title
+    assert fallback_title("  what is   the capital of France, and why?  ") == "What is the capital of France"  # six words, trailing comma dropped
+    assert fallback_title("```python\nprint(1)") == "Python print(1)"
+    assert len(fallback_title("x" * 200)) <= 60
+    assert fallback_title("") == "" and fallback_title("   ") == ""
+
+
 def test_spinoff_detected_from_dict_history():
     sess = SimpleNamespace(history=[
         {"role": "system", "metadata": {"research_spinoff_from": "rp-2"}},

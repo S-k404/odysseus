@@ -149,6 +149,21 @@ python3 ~/.gemini/config/skills/odysseus/scripts/odysseus_api.py cookbook serve 
 - `cookbook stop` only targets task sessionIds matching `[a-zA-Z0-9_-]+`.
 - The agent CAN spawn GPU-pinning long-lived processes — always `cookbook stop` your previous attempt before relaunching, and check `cookbook tasks` for collisions on the same `--port` before launching.
 
+## MCP Tools
+
+The scoped agent API supports querying and calling Odysseus's registered MCP tools directly:
+
+- `GET /api/codex/mcp/tools` — list all connected tools across active MCP servers. Requires `mcp:read` (or `mcp:call`).
+- `POST /api/codex/mcp/{server_id}/{tool_name}` — invoke an MCP tool with a JSON argument payload. Requires `mcp:call`.
+
+```bash
+# List available MCP tools across all active servers
+python3 ~/.gemini/config/skills/odysseus/scripts/odysseus_api.py mcp tools
+
+# Invoke a specific MCP tool
+python3 ~/.gemini/config/skills/odysseus/scripts/odysseus_api.py mcp call uncensor find_censored_regions '{"image_path": "/path/to/image.png"}'
+```
+
 ## Forbidden Bypass Pattern
 
 If you are about to reach the Odysseus host/container, import app internals, query the database, or call MCP helper modules directly, stop. Those paths bypass Odysseus Settings and token scopes. Ask the user to enable the relevant Antigravity Agent tool toggle instead.

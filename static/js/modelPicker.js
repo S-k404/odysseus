@@ -6,7 +6,7 @@ import uiModule from './ui.js';
 import settingsModule from './settings.js';
 import { isImageModelId, isNonChatModelId, sortModelObjects } from './modelSort.js';
 import spinnerModule from './spinner.js';
-import { releaseLocalModels } from './localModels.js';
+import { releaseLocalModels, optimiseMemory, optimiseSummary, autoRouteEnabled, setAutoRoute } from './localModels.js';
 
 const API_BASE = window.location.origin;
 
@@ -119,9 +119,20 @@ export const CLAUDE_TIERS = [
   {
     id: 'music_gen',
     name: 'Music Gen & Neural Audio',
-    desc: 'Procedural music synthesis (synthwave, ambient), Kokoro voice & Whisper STT',
+    desc: 'Procedural and neural (MusicGen) music, Kokoro voice & Whisper STT. The music model loads only while a clip is made.',
     icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
     versions: [
+      { id: 'huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S', label: 'Qwen 3.6 35B MoE', tag: 'Best quality', endpoint_id: 'f6584950' },
+      { id: 'huggingface.co/unsloth/qwen3-8b-gguf:Q4_K_M', label: 'Qwen3 8B', tag: 'Lighter', endpoint_id: 'f6584950' },
+    ],
+  },
+  {
+    id: 'video_gen',
+    name: 'Video Gen',
+    desc: 'Short text-to-video clips. The chat model only writes the request; the video model loads when you ask and other models are unloaded first, so pick the lighter one.',
+    icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0ea5e9" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="13" height="12" rx="2"/><path d="M15 10l7-4v12l-7-4z"/></svg>`,
+    versions: [
+      { id: 'huggingface.co/unsloth/qwen3-8b-gguf:Q4_K_M', label: 'Qwen3 8B', tag: 'Lighter', endpoint_id: 'f6584950' },
       { id: 'huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S', label: 'Qwen 3.6 35B MoE', tag: 'Best quality', endpoint_id: 'f6584950' },
     ],
   },
@@ -292,6 +303,15 @@ async function _ensureDefaultPendingChat() {
  * @param {function} deps.setPendingChat - sets _pendingChat object
  * @param {function} deps.createDirectChat - creates a new direct chat session
  */
+// The plan card's "Run with" list and switch: the chat models this picker lists, and the same
+// switch a click in the picker does (it also unloads the model being left, so a plan made
+// with a big model frees its RAM before the specific model loads).
+// This module is loaded twice (with and without a ?v= suffix) and only one copy is initialised, so the
+// hooks live on window: whichever copy chat.js or autoRoute.js imported reaches the initialised one.
+export function listChatModels() { const p = window.__odysseusPicker; return p ? p.chatModels() : []; }
+export function listImageModels() { const p = window.__odysseusPicker; return p ? p.imageModels() : []; }
+export function switchToModel(m) { const p = window.__odysseusPicker; return p && m ? p.pick(m) : Promise.resolve(); }
+
 export function initModelPicker(deps) {
   _deps = deps;
   _initModelPickerDropdown();
@@ -435,6 +455,7 @@ function _initModelPickerDropdown() {
   // Voice and embedding models live in their own settings; image models get their own section.
   function _getAllModels() { return _collectModels(mid => !isNonChatModelId(mid) && !isImageModelId(mid)); }
   function _getImageModels() { return _collectModels(isImageModelId); }
+  window.__odysseusPicker = { chatModels: _getAllModels, imageModels: _getImageModels, pick: _pick };
 
   function _hasModelCache() {
     try {
@@ -1185,6 +1206,42 @@ async function _pick(m) {
   search.addEventListener('keydown', (e) => {
     _handlePickerKeydown(e, listEl, '.model-switch-item', _close);
   });
+  // Footer: auto-switch on/off, and free what Odysseus can without picking anything.
+  if (!menu.querySelector('.mp-auto-btn')) {
+    const autoBtn = document.createElement('button');
+    autoBtn.type = 'button';
+    autoBtn.className = 'mp-optimise-btn mp-auto-btn';
+    autoBtn.title = 'Before each message, switch to the model that fits it (pictures, plans, tools). Models load only when you send.';
+    const paintAuto = () => { autoBtn.textContent = 'Auto-switch models: ' + (autoRouteEnabled() ? 'On' : 'Off'); };
+    paintAuto();
+    autoBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setAutoRoute(!autoRouteEnabled());
+      paintAuto();
+    });
+    menu.appendChild(autoBtn);
+  }
+  if (!menu.querySelector('.mp-optimise-btn:not(.mp-auto-btn)')) {
+    const optimiseBtn = document.createElement('button');
+    optimiseBtn.type = 'button';
+    optimiseBtn.className = 'mp-optimise-btn';
+    optimiseBtn.textContent = 'Optimise memory';
+    optimiseBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      optimiseBtn.disabled = true;
+      try {
+        // Keep the chat's own model loaded; free everything else.
+        const sid = _deps && _deps.getCurrentSessionId && _deps.getCurrentSessionId();
+        const session = sid && _deps.getSessions ? _deps.getSessions().find(x => x.id === sid) : null;
+        uiModule.showToast(optimiseSummary(await optimiseMemory((session && session.model) || '')), 7000);
+      } catch (_) {
+        uiModule.showToast('Could not optimise memory');
+      } finally {
+        optimiseBtn.disabled = false;
+      }
+    });
+    menu.appendChild(optimiseBtn);
+  }
   const addModelsBtn = document.getElementById('model-picker-add-models-btn');
   if (addModelsBtn) {
     addModelsBtn.addEventListener('click', (e) => {

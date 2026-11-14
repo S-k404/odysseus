@@ -154,3 +154,17 @@ def test_disabled_chat_endpoint_does_not_make_an_image_endpoint_shared(monkeypat
 
     assert chat_routes._is_image_generation_session(
         _session(model="my-custom-painter", endpoint_url=DMR + "/chat/completions"))
+
+
+def test_model_runner_pinned_list_still_decides_when_the_chat_endpoint_is_disabled(monkeypatch):
+    """Every chat went to image generation once the chat endpoint beside the image one was off."""
+    db = _FakeDb([
+        _endpoint(DMR, "llm", models=DMR_MODELS, enabled=False),
+        _endpoint(DMR, "image", models=DMR_MODELS, pinned=["docker.io/ai/stable-diffusion:latest"]),
+    ])
+    monkeypatch.setattr(chat_routes, "SessionLocal", lambda: db)
+    chat = _session(model="huggingface.co/unsloth/qwen3.6-35b-a3b-gguf:UD-Q3_K_S", endpoint_url=DMR + "/chat/completions")
+    image = _session(model="docker.io/ai/stable-diffusion:latest", endpoint_url=DMR + "/chat/completions")
+
+    assert not chat_routes._is_image_generation_session(chat)
+    assert chat_routes._is_image_generation_session(image)

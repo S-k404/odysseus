@@ -3,6 +3,7 @@
 music_gen_server.py - MCP Server for Music & Neural Audio Generation
 Provides tools for:
 - Parametric procedural music synthesis (WAV/MP3 generation: chords, melodies, ambient tracks)
+- Neural music generation from a text prompt (MusicGen, loaded only while a clip is made)
 - Neural speech & voice generation (via Speaches/Kokoro port 8000)
 - Speech & audio transcription (via Faster-Whisper port 8000)
 """
@@ -18,6 +19,9 @@ import httpx
 from pathlib import Path
 from typing import Dict, Any, List
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import media_runner
+
 def send_response(response: Dict[str, Any]):
     line = json.dumps(response)
     sys.stdout.write(line + "\n")
@@ -28,6 +32,11 @@ AUDIO_DIR = WORKSPACE / "audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 SPEACHES_BASE = os.environ.get("SPEACHES_BASE_URL", "http://127.0.0.1:8000/v1")
+
+# Neural music: MusicGen runs in a short-lived worker, so it is only in memory while a clip is made.
+MUSIC_MODEL = os.environ.get("ODYSSEUS_MUSIC_MODEL", "facebook/musicgen-small")
+MUSIC_MODEL_SIZE = "about 2.4 GB"
+MUSIC_NEEDS_GB = 6.0
 
 TOOLS = [
     {
@@ -61,6 +70,23 @@ TOOLS = [
                     "description": "Output filename (e.g. 'theme_song.wav')"
                 }
             }
+        }
+    },
+    {
+        "name": "generate_music_neural",
+        "description": "Compose original music from a text description with a neural model (MusicGen) on the local GPU. "
+                       "Slower and heavier than generate_music_track (about a minute for a short clip) but far more realistic. "
+                       "The model loads only while the clip is made. The first use downloads it and needs allow_download=true.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "What the music should sound like (e.g. 'calm lofi piano with soft rain')"},
+                "duration_seconds": {"type": "integer", "description": "Length in seconds (5 to 30)", "default": 10},
+                "seed": {"type": "integer", "description": "Reuse a seed to repeat a result"},
+                "filename": {"type": "string", "description": "Output filename (e.g. 'theme.wav')"},
+                "allow_download": {"type": "boolean", "description": "Set true only after the user agreed to download the model on first use"}
+            },
+            "required": ["prompt"]
         }
     },
     {
@@ -190,8 +216,58 @@ def handle_generate_music_track(args: Dict[str, Any]) -> str:
     except Exception as e:
         return json.dumps({"status": "error", "error": str(e)})
 
+def handle_generate_music_neural(args: Dict[str, Any]) -> str:
+    prompt = str(args.get("prompt", "")).strip()
+    if not prompt:
+        return media_runner.error("prompt is required: describe the music, e.g. 'calm lofi piano with soft rain'.")
+    seconds = max(5, min(int(args.get("duration_seconds") or 10), 30))
+    python = media_runner.find_python(("torch", "transformers", "numpy"))
+    if not python:
+        return media_runner.error("Neural music needs a Python with torch and transformers, and none was found. "
+                                  "Set ODYSSEUS_MEDIA_PYTHON to one.")
+    if not media_runner.model_downloaded(MUSIC_MODEL) and not args.get("allow_download"):
+        return media_runner.needs_download_message(MUSIC_MODEL, MUSIC_MODEL_SIZE)
+    short = media_runner.not_enough_memory(MUSIC_NEEDS_GB)
+    if short:
+        return media_runner.error(short)
+
+    fn = args.get("filename") or f"music_neural_{int(time.time())}.wav"
+    if not fn.endswith(".wav"):
+        fn += ".wav"
+    out_path = AUDIO_DIR / Path(fn).name
+    cmd = ["--model", MUSIC_MODEL, "--prompt", prompt, "--seconds", str(seconds), "--out", str(out_path)]
+    if args.get("seed") is not None:
+        cmd += ["--seed", str(int(args["seed"]))]
+    result = media_runner.run_worker(python, "musicgen_worker.py", cmd, timeout=1200)
+    if result.get("status") == "success":
+        result["size_kb"] = round(out_path.stat().st_size / 1024, 1)
+        result["model"] = MUSIC_MODEL
+        result["message"] = f"Generated {result.get('seconds')} s of music: {out_path}"
+    return json.dumps(result, indent=2)
+
+
+def speaches_error(exc: Exception, action: str) -> str:
+    """What went wrong with the speech service, in words (not a raw socket error)."""
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return json.dumps({
+            "status": "error", "service": "speaches", "retry": False,
+            "error": (
+                f"The speech service (Speaches) isn't running at {SPEACHES_BASE}, so {action} is unavailable. "
+                "It normally runs as the 'speaches' container of the Docker stack. Start it with 'docker compose up -d speaches', "
+                "or point SPEACHES_BASE_URL at a running one. generate_music_track and generate_music_neural "
+                "don't need it."
+            ),
+        }, indent=2)
+    if isinstance(exc, httpx.TimeoutException):
+        return json.dumps({"status": "error", "service": "speaches",
+                           "error": f"The speech service did not answer in time, so {action} failed. Try a shorter input."})
+    return json.dumps({"status": "error", "service": "speaches", "error": f"{action} failed: {exc}"})
+
+
 def handle_generate_speech_track(args: Dict[str, Any]) -> str:
-    text = args.get("text", "")
+    text = str(args.get("text", "")).strip()
+    if not text:
+        return json.dumps({"status": "error", "error": "text is required: the script or dialogue to speak."})
     voice = args.get("voice", "af_heart")
     fn = args.get("filename")
     if not fn:
@@ -231,7 +307,7 @@ def handle_generate_speech_track(args: Dict[str, Any]) -> str:
                     "error": resp.text
                 })
     except Exception as e:
-        return json.dumps({"status": "error", "error": str(e)})
+        return speaches_error(e, "speech generation")
 
 def handle_transcribe_audio(args: Dict[str, Any]) -> str:
     audio_path = args.get("audio_path", "")
@@ -251,7 +327,7 @@ def handle_transcribe_audio(args: Dict[str, Any]) -> str:
                 else:
                     return json.dumps({"status": "error", "status_code": resp.status_code, "text": resp.text})
     except Exception as e:
-        return json.dumps({"status": "error", "error": str(e)})
+        return speaches_error(e, "transcription")
 
 def main():
     while True:
@@ -294,6 +370,11 @@ def main():
             
             if name == "generate_music_track":
                 res = handle_generate_music_track(args)
+            elif name == "generate_music_neural":
+                try:
+                    res = handle_generate_music_neural(args)
+                except Exception as e:
+                    res = media_runner.error(f"{type(e).__name__}: {e}")
             elif name == "generate_speech_track":
                 res = handle_generate_speech_track(args)
             elif name == "transcribe_audio_file":

@@ -33,6 +33,8 @@ def test_collect_service_health_shape(monkeypatch):
     import asyncio
 
     # Avoid touching real data sources / network.
+    monkeypatch.delenv("TTS_OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("STT_OPENAI_API_BASE", raising=False)
     monkeypatch.setattr(sh, "_gather_inputs", lambda: {
         "settings": {"search_provider": "disabled"},
         "integrations": [],
@@ -42,7 +44,8 @@ def test_collect_service_health_shape(monkeypatch):
     out = asyncio.run(sh.collect_service_health(_Store(True), _Store(True)))
     assert set(out) == {"overall", "services", "timestamp"}
     names = {s["name"] for s in out["services"]}
-    assert names == {"chromadb", "searxng", "ntfy", "email", "providers"}
+    assert names == {"chromadb", "searxng", "speaches", "ntfy", "email",
+                     "providers"}
     # Chroma healthy, everything else disabled → overall ok.
     assert out["overall"] == sh.OK
 
@@ -82,7 +85,7 @@ def test_classify_error_categories():
 def test_collect_runs_subsystems_concurrently(monkeypatch):
     # The aggregate is bounded by running the (internally-bounded) subsystems
     # concurrently, so total wall-clock ≈ max(subsystem), not the sum. Each of
-    # the four network subsystems here sleeps ~0.6s; sequential would be ~2.4s.
+    # the five network subsystems here sleeps ~0.6s; sequential would be ~3s.
     import asyncio
     import time
     monkeypatch.setattr(sh, "_gather_inputs", lambda: {
@@ -96,6 +99,7 @@ def test_collect_runs_subsystems_concurrently(monkeypatch):
         return _fn
 
     monkeypatch.setattr(sh, "searxng_health", slow("searxng"))
+    monkeypatch.setattr(sh, "speaches_health", slow("speaches"))
     monkeypatch.setattr(sh, "ntfy_health", slow("ntfy"))
     monkeypatch.setattr(sh, "email_health", slow("email"))
     monkeypatch.setattr(sh, "providers_health", slow("providers"))
@@ -105,7 +109,7 @@ def test_collect_runs_subsystems_concurrently(monkeypatch):
     elapsed = time.monotonic() - t0
     assert elapsed < 1.5, f"subsystems not concurrent: took {elapsed:.1f}s"
     assert {s["name"] for s in out["services"]} == {
-        "chromadb", "searxng", "ntfy", "email", "providers"}
+        "chromadb", "searxng", "speaches", "ntfy", "email", "providers"}
 
 
 def test_collect_aggregate_deadline_yields_controlled_result(monkeypatch):

@@ -251,8 +251,22 @@ def needs_auto_name(name: str) -> bool:
     return False
 
 
+def fallback_title(first_msg: str) -> str:
+    """A title taken from the message itself, for when no model could be asked (it was busy, refused, or unreachable)."""
+    words = re.sub(r"\s+", " ", first_msg or "").strip().split(" ")
+    title = " ".join(words[:6]).strip(" .,:;!?\"'`#*-")
+    if len(title) > 60:
+        title = title[:59].rstrip() + "…"
+    return title[:1].upper() + title[1:]
+
+
 async def auto_name_session(session_manager, sess):
-    """Generate a short title for a session from its first user message."""
+    """Generate a short title for a session from its first user message.
+
+    If the model cannot be asked (the memory guard refused it, the server is down), the chat is titled from the first
+    words of the message instead of being left with its placeholder name, and that is one quiet log line, not an error.
+    """
+    first_msg = ""
     try:
         from src.llm_core import llm_call_async
         from src.task_endpoint import resolve_task_endpoint
@@ -309,8 +323,15 @@ async def auto_name_session(session_manager, sess):
             logger.info(f"Auto-named session {sess.id}: {title}")
 
     except Exception as e:
-        import traceback
-        logger.error(f"Auto-name failed for {sess.id}: {e}\n{traceback.format_exc()}")
+        status = getattr(e, "status_code", None)
+        if status in (409, 429, 502, 503, 504):  # refused or unreachable: expected on a busy or memory-tight Mac
+            logger.warning("Auto-name for %s skipped (%s: %s); using the first words of the message", sess.id, status, str(getattr(e, "detail", e))[:100])
+        else:
+            import traceback
+            logger.error(f"Auto-name failed for {sess.id}: {e}\n{traceback.format_exc()}")
+        title = fallback_title(first_msg)
+        if title and needs_auto_name(getattr(sess, "name", "") or ""):
+            session_manager.update_session_name(sess.id, title)
 
 
 def extract_preset(chat_handler, preset_id) -> PresetInfo:

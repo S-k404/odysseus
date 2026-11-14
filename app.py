@@ -883,6 +883,7 @@ app.include_router(setup_codex_routes(
     memory_router=memory_router,
     calendar_router=calendar_router,
     document_router=document_router,
+    mcp_manager=mcp_manager,
 ))
 app.include_router(setup_claude_routes())
 app.include_router(setup_antigravity_routes())

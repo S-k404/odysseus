@@ -513,6 +513,13 @@ class ToolIndex:
         frozenset({"write a", "create a doc", "draft", "compose", "poem", "story",
                    "essay", "outline", "letter"}):
             {"create_document", "edit_document", "update_document"},
+        # Manga panel / image decensoring intent
+        frozenset({"decensor", "uncensor", "mosaic", "pixelation", "censor bar",
+                   "censor bars", "manga panel", "manga panels", "unblur image",
+                   "decensoring", "uncensoring"}):
+            {"mcp__uncensor__uncensor_image", "mcp__uncensor__find_censored_regions",
+             "mcp__uncensor__uncensor_folder", "mcp__uncensor__decensor_image",
+             "mcp__uncensor__decensor_folder"},
     }
 
     def get_tools_for_query(

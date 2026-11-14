@@ -1,7 +1,7 @@
 """Consolidated service health / degraded-state reporting.
 
-ROADMAP: "Better degraded-state reporting for ChromaDB, SearXNG, email, ntfy,
-and provider probes." There was no single readout of which subsystems are
+ROADMAP: "Better degraded-state reporting for ChromaDB, SearXNG, Speaches, email,
+ntfy, and provider probes." There was no single readout of which subsystems are
 actually working — `/api/health` is only a liveness ping and each subsystem's
 signal lives in a different module. This collects them into one uniform,
 *non-intrusive* report (no test push is sent, no real search is run), so the
@@ -298,6 +298,59 @@ def ntfy_health(integrations: List[Dict[str, Any]], settings: Dict[str, Any],
                     base=safe_base, reminder_channel=channel, error=category)
 
 
+# ── Speaches (Kokoro TTS + Whisper STT) ──
+
+_SPEECH_ENV = (("tts", "TTS_OPENAI_API_BASE"), ("stt", "STT_OPENAI_API_BASE"))
+
+
+def speaches_health(env: Optional[Dict[str, str]] = None,
+                    *, http_get: Callable = _http_get) -> Dict[str, Any]:
+    """Reachability probe for the speech server behind TTS/STT.
+
+    Reads the same ``TTS_OPENAI_API_BASE`` / ``STT_OPENAI_API_BASE`` the speech
+    services use (already pointed at 127.0.0.1 by ``native_hosts`` when running
+    natively) and asks each distinct server for ``/health``. Nothing is
+    synthesised or transcribed. Neither variable set → disabled.
+    """
+    import os
+    env = os.environ if env is None else env
+    bases: Dict[str, List[str]] = {}
+    for role, var in _SPEECH_ENV:
+        raw = (env.get(var) or "").strip()
+        if not raw:
+            continue
+        p = urlparse(raw)
+        origin = f"{p.scheme}://{p.netloc}" if p.scheme and p.netloc else raw.rstrip("/")
+        bases.setdefault(origin, []).append(role)
+    if not bases:
+        return _svc("speaches", DISABLED, "No TTS or STT server configured.")
+
+    reachable: List[str] = []
+    failed: List[str] = []
+    last_category = "error"
+    for origin, roles in bases.items():
+        try:
+            r = http_get(origin + "/health", timeout=_PROBE_TIMEOUT)
+            code = getattr(r, "status_code", 0)
+            if 200 <= code < 300:
+                reachable += roles
+                continue
+            last_category = "http_error"
+        except Exception as e:
+            last_category = _classify_error(e)
+        failed += roles
+    meta = {"servers": [_safe_url(o) for o in bases],
+            "reachable": sorted(reachable), "failed": sorted(failed)}
+    if not failed:
+        return _svc("speaches", OK, "Speech server reachable.", **meta)
+    if reachable:
+        return _svc("speaches", DEGRADED,
+                    f"Unreachable for {', '.join(sorted(failed))} "
+                    f"({_detail_for(last_category)}).", **meta)
+    return _svc("speaches", DOWN, f"Unreachable ({_detail_for(last_category)}).",
+                error=last_category, **meta)
+
+
 # ── Email (IMAP) ──
 
 def email_health(accounts: List[Dict[str, Any]],
@@ -469,7 +522,7 @@ async def collect_service_health(rag_manager: Any = None,
     """Run every probe and return {overall, services, timestamp}.
 
     Bounded end-to-end: in-process ChromaDB flags are read synchronously; the
-    four network subsystems run concurrently, each under `_SUBSYSTEM_DEADLINE`,
+    five network subsystems run concurrently, each under `_SUBSYSTEM_DEADLINE`,
     with an overall `_AGGREGATE_DEADLINE` backstop. Per-item probes inside
     providers/email are themselves bounded by `_FANOUT_BUDGET`.
     """
@@ -481,9 +534,10 @@ async def collect_service_health(rag_manager: Any = None,
     # ChromaDB is in-process and synchronous (just reads flags).
     chroma = chromadb_health(rag_manager, memory_vector)
 
-    names = ["searxng", "ntfy", "email", "providers"]
+    names = ["searxng", "speaches", "ntfy", "email", "providers"]
     coros = [
         _run_subsystem("searxng", searxng_health, settings),
+        _run_subsystem("speaches", speaches_health),
         _run_subsystem("ntfy", ntfy_health, inputs["integrations"], settings),
         _run_subsystem("email", email_health, inputs["accounts"]),
         _run_subsystem("providers", providers_health, inputs["endpoints"]),

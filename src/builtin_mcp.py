@@ -94,7 +94,10 @@ _BUILTIN_SERVERS = {
     "pcb_maker":       ("mcp_servers/pcb_maker_server.py",       "Built-in: KiCad & JLCPCB PCB Maker"),
     "computer_use":    ("mcp_servers/computer_use_server.py",   "Built-in: Computer Use & Screen Recording"),
     "music_gen":       ("mcp_servers/music_gen_server.py",      "Built-in: Music & Neural Audio Generator"),
+    "video_gen":       ("mcp_servers/video_gen_server.py",      "Built-in: Video Generator (text to video, loads only while a clip is made)"),
     "project_manager": ("mcp_servers/project_manager_server.py","Built-in: Claude Project & Markdown Manager"),
+    "uncensor":        ("mcp_servers/uncensor_server.py",       "Built-in: Image Decensor (Manga Panels & Mosaic Removal)"),
+    "learnharness":    ("mcp_servers/learnharness_server.py",   "Built-in: LearnHarness Pedagogical Knowledge & Records"),
 }
 
 # Built-in servers that need a credential and are skipped when it is unset:

@@ -18,6 +18,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     var splashView: NSView!
     var statusLabel: NSTextField!
     var spinner: NSProgressIndicator!
+    var retryButton: NSButton!
     var serverProcess: Process?
     var menuBar: MenuBarStats?
     var childWindows: [NSWindow] = []
@@ -128,6 +129,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         spinner.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
         spinner.startAnimation(nil)
         splashView.addSubview(spinner)
+
+        // Retry Button
+        retryButton = NSButton(title: "Retry", target: self, action: #selector(didClickRetry))
+        retryButton.bezelStyle = .rounded
+        retryButton.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        retryButton.frame = NSRect(x: (winWidth - 200) / 2, y: winHeight / 2 - 120, width: 200, height: 32)
+        retryButton.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
+        retryButton.isHidden = true
+        splashView.addSubview(retryButton)
 
         window.contentView?.addSubview(webView)
         window.contentView?.addSubview(splashView)
@@ -271,9 +281,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         statusLabel.stringValue = "\(reason)\nLog: \(logPath)"
         spinner.stopAnimation(nil)
         spinner.isHidden = true
+        if reason.contains("Docker") || reason.contains("docker compose stop") {
+            retryButton.title = "Stop Docker & Retry"
+        } else {
+            retryButton.title = "Retry"
+        }
+        retryButton.isHidden = false
+    }
+
+    @objc func didClickRetry() {
+        retryButton.isHidden = true
+        spinner.isHidden = false
+        spinner.startAnimation(nil)
+        statusLabel.stringValue = "Stopping conflicting servers and retrying..."
+
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else { return }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            proc.arguments = ["docker", "compose", "stop", "odysseus"]
+            proc.currentDirectoryURL = URL(fileURLWithPath: self.repoDir)
+            var env = ProcessInfo.processInfo.environment
+            let toolPaths = ["/opt/homebrew/bin", "/usr/local/bin", "\(NSHomeDirectory())/.local/bin"]
+            env["PATH"] = (toolPaths + [env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"]).joined(separator: ":")
+            proc.environment = env
+            try? proc.run()
+            proc.waitUntilExit()
+
+            DispatchQueue.main.async {
+                self.checkOrStartServer()
+            }
+        }
     }
 
     func loadAppUI() {
+        retryButton?.isHidden = true
         statusLabel.stringValue = "Connecting..."
         webView.load(URLRequest(url: self.appURL))
     }

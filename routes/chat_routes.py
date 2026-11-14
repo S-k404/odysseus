@@ -67,6 +67,7 @@ from routes.chat_helpers import (
 )
 from src.action_intents import ToolIntent, classify_tool_intent as _classify_tool_intent
 from src.image_model_ids import looks_like_image_generation_model
+from src.model_router import is_simple_chat
 from src.tool_policy import (
     WEB_TOOL_NAMES,
     build_effective_tool_policy,
@@ -78,6 +79,9 @@ from src.tool_approval_scopes import stamp_chat_session_grant
 from src.tool_security import delegated_credential_blocked_tools
 
 logger = logging.getLogger(__name__)
+
+# Longest an image reply may sit on "Generating image…" (waiting for the model slot, loading, drawing).
+_IMAGE_GEN_MAX_SECONDS = float(os.getenv("ODYSSEUS_IMAGE_GEN_TIMEOUT", "600") or "600")
 
 # Track active streams for partial-save safety net
 _active_streams: Dict[str, dict] = {}
@@ -486,6 +490,9 @@ def _endpoint_claims_image_model(endpoint, model: str, endpoints) -> bool:
     model" would send every chat on that server to image generation. When an enabled chat
     endpoint shares the base URL, only models pinned to the image endpoint count.
     """
+    from src.docker_model_runner import looks_like_dmr
+    from src.ollama_runner import looks_like_ollama
+
     wanted = (model or "").strip()
     base = _normalize_base(getattr(endpoint, "base_url", "") or "").rstrip("/")
     shares_server = any(
@@ -495,14 +502,20 @@ def _endpoint_claims_image_model(endpoint, model: str, endpoints) -> bool:
         and _normalize_base(getattr(other, "base_url", "") or "").rstrip("/") == base
         for other in endpoints
     )
-    if not shares_server:
-        return _endpoint_cache_contains_model(endpoint, model)
     raw = getattr(endpoint, "pinned_models", None)
     try:
         pinned = json.loads(raw) if isinstance(raw, str) and raw else (raw or [])
     except Exception:
         pinned = []
-    return isinstance(pinned, list) and wanted in {str(item).strip() for item in pinned}
+    pinned_names = {str(item).strip() for item in pinned} if isinstance(pinned, list) else set()
+    # A model runner serves chat and image models together, so its cache is the whole
+    # server. The pinned list is then the only thing that says which are images, even
+    # when the chat endpoint beside it is disabled or not visible to this user (every
+    # chat then went to image generation and sat on "Generating image…").
+    serves_chat_too = shares_server or looks_like_dmr(base) or looks_like_ollama(base)
+    if serves_chat_too and (shares_server or pinned_names):
+        return wanted in pinned_names
+    return _endpoint_cache_contains_model(endpoint, model)
 
 
 def _is_image_generation_session(sess, owner: str | None = None) -> bool:
@@ -1060,6 +1073,13 @@ def setup_chat_routes(
         approved_plan = ""
         if not plan_mode:
             approved_plan = (form_data.get("approved_plan") or "").strip()[:8192]
+        # A short plain message ("say hi in five words") doesn't need reasoning, and a thinking model that is
+        # allowed to think about it spends hundreds of tokens (and sometimes loops). Off for those; opt out with
+        # ODYSSEUS_SMART_THINKING=0.
+        if (os.getenv("ODYSSEUS_SMART_THINKING", "1").lower() not in {"0", "false", "no", "off"}
+                and is_simple_chat(message if isinstance(message, str) else "", chat_mode, plan_mode, bool(approved_plan),
+                                   bool(attachments and str(attachments).strip() not in ("", "[]")))):
+            reasoning_effort = "none"
         # Did the USER explicitly pick agent mode? (vs. us auto-escalating
         # below). Skill extraction should only learn from real agent sessions,
         # not chats we quietly promoted for a notes/calendar intent.
@@ -1941,7 +1961,12 @@ def setup_chat_routes(
                     _img_task = asyncio.create_task(do_generate_image(f"{_user_msg}\n{sess.model}\n512x512", session, owner=_user))
                 _img_started = time.time()
                 _img_tick = 0
+                _img_timed_out = False
                 while not _img_task.done():
+                    if time.time() - _img_started > _IMAGE_GEN_MAX_SECONDS:
+                        _img_task.cancel()
+                        _img_timed_out = True
+                        break
                     try:
                         _progress = await asyncio.wait_for(_progress_queue.get(), timeout=2.0)
                     except asyncio.TimeoutError:
@@ -1962,7 +1987,26 @@ def setup_chat_routes(
                             "message": f"{_label}… {_step}/{_total}",
                         })
                     yield f'data: {json.dumps(_progress_data)}\n\n'
-                _img_result = await _img_task
+                # Always end with a result: an error here must show as one, not leave
+                # the tool card on "Generating image…" forever.
+                try:
+                    if _img_timed_out:
+                        _img_limit = (
+                            f"{int(_IMAGE_GEN_MAX_SECONDS // 60)} minutes"
+                            if _IMAGE_GEN_MAX_SECONDS >= 120 else f"{int(_IMAGE_GEN_MAX_SECONDS)} seconds"
+                        )
+                        _img_result = {"error": (
+                            f"Image generation did not finish within {_img_limit} and was stopped. "
+                            "The image model may not have been able to load (check free memory), "
+                            "or another model is still answering."
+                        )}
+                    else:
+                        _img_result = await _img_task
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _img_exc:
+                    logger.warning("Image generation task failed", exc_info=_img_exc)
+                    _img_result = {"error": f"Image generation failed: {_img_exc}"}
                 _img_output = _img_result.get("results", _img_result.get("error", ""))
                 _img_tool_data = {"type": "tool_output", "tool": _image_tool_name, "command": _user_msg[:100], "output": _img_output, "exit_code": 0 if "error" not in _img_result else 1}
                 for _k in ("image_url", "image_id", "image_prompt", "image_model", "image_size", "image_quality"):

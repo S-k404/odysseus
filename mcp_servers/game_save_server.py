@@ -325,10 +325,93 @@ def _lz_compress(uncompressed, bits_per_char, getchar):
     return "".join(data)
 
 
+# Easy Save 3 (AES): 16-byte IV + AES-128-CBC/PKCS7, key = PBKDF2-HMAC-SHA1(password, IV, 100, 16 bytes).
+# The passwords come from each game's own data (an ES3Defaults asset or its IL2CPP string literals).
+_ES3_PASSWORDS = {"ISEKAI QUEST": "projectHS", "ルーザーメーカー": "qawssdHJ", "SecretFlasherManaka": "unReRU821Drq83"}
+
+
+def _es3_password(path: Path | None) -> str | None:
+    s = str(path or "")
+    return next((pw for game, pw in _ES3_PASSWORDS.items() if game in s), None)
+
+
+def _es3_cipher(encrypt: bool, pw: str, iv: bytes, data: bytes) -> bytes | None:
+    import ctypes
+    lib = ctypes.CDLL("/usr/lib/system/libcommonCrypto.dylib")  # macOS CommonCrypto, no extra package
+    key = hashlib.pbkdf2_hmac("sha1", pw.encode("utf-8"), iv, 100, 16)
+    out = ctypes.create_string_buffer(len(data) + 16)
+    moved = ctypes.c_size_t(0)
+    # op: 0 encrypt / 1 decrypt; algorithm 0 = AES; options 1 = PKCS7 padding
+    rc = lib.CCCrypt(0 if encrypt else 1, 0, 1, key, 16, iv, data, len(data), out, len(out), ctypes.byref(moved))
+    return out.raw[:moved.value] if rc == 0 else None
+
+
+# Nemurimouto: the `sav` file is JSON XORed with a repeating key. "word" turns it into 100% printable text; the key
+# was found among the string literals of its Assembly-CSharp.dll.
+_XOR_GAMES = {"pachipoi/Nemurimouto": b"word"}
+
+
+def _xor_key(path: Path | None) -> bytes | None:
+    s = str(path or "")
+    return next((k for g, k in _XOR_GAMES.items() if g in s), None)
+
+
+def _xor(data: bytes, key: bytes) -> bytes:
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+
+
+def _es3_json(v: Any, depth: int = 0) -> str:
+    """Easy Save's own JSON layout: tabs, CRLF, `"key" : value`, and `},{` between objects of an array."""
+    pad, close = "\t" * (depth + 1), "\t" * depth
+    if isinstance(v, dict):
+        if not v:
+            return "{}"
+        # an array of the game's own class is written one level shallower than a List<T> or a built-in array
+        tname = str(v.get("__type", "")).split(",")[0]
+        shallow = (tname.endswith("[]") and not tname.startswith(("System.", "UnityEngine."))
+                   and isinstance(v.get("value"), list) and any(isinstance(x, dict) for x in v["value"]))
+        body = ",\r\n".join(
+            f"{pad}{json.dumps(k, ensure_ascii=False)} : "
+            f"{_es3_json(x, depth if shallow and k == 'value' and isinstance(x, list) else depth + 1)}"
+            for k, x in v.items())
+        return "{\r\n" + body + "\r\n" + close + "}"
+    if isinstance(v, list):
+        if not v:
+            return "[]"
+        items = ",".join(_es3_json(x, depth + 1) for x in v)
+        return "[\r\n" + pad + items + "\r\n" + close + "]"
+    return json.dumps(v, ensure_ascii=False)
+
+
+def _es3_decrypt(raw: bytes, pw: str) -> bytes | None:
+    if len(raw) < 32 or len(raw) % 16:
+        return None
+    return _es3_cipher(False, pw, raw[:16], raw[16:])
+
+
 def decode(path: Path) -> tuple[str, Any]:
     """Return (format, data). data is JSON-like for structured formats, str for text."""
     raw = path.read_bytes()
     name = path.name.lower()
+    pw = _es3_password(path)
+    if pw:
+        plain = _es3_decrypt(raw, pw)
+        if plain is not None:
+            try:
+                return "es3", _expand(json.loads(plain.decode("utf-8-sig")))
+            except ValueError:
+                # Easy Save writes Dictionary<int, T> with bare integer keys ({0:{...}}), which is not JSON:
+                # show the decrypted text so replace_in_text_save can patch it
+                try:
+                    return "es3-text", plain.decode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+    xk = _xor_key(path)
+    if xk and name == "sav":
+        try:
+            return "xor-json", _expand(json.loads(_xor(raw, xk).decode("utf-8-sig")))
+        except (ValueError, UnicodeDecodeError):
+            pass
     if name.endswith(".rpgsave"):
         return "rpgmv", json.loads(lz_decompress_b64(raw.decode("ascii")))
     if name.endswith(".rmmzsave"):
@@ -391,6 +474,28 @@ def _game_lzstring(save: Path) -> Path | None:
 
 
 def encode(fmt: str, data: Any, original: bytes, path: Path | None = None) -> bytes:
+    if fmt == "xor-json":
+        xk = _xor_key(path)
+        if not xk:
+            raise ValueError("cannot re-encode: no XOR key for this file")
+        return _xor(encode("json", data, _xor(original, xk), path), xk)
+    if fmt == "es3-text":
+        pw = _es3_password(path)
+        enc = _es3_cipher(True, pw, original[:16], data.encode("utf-8")) if pw else None
+        if enc is None:
+            raise ValueError("Easy Save encryption failed")
+        return original[:16] + enc
+    if fmt == "es3":
+        pw = _es3_password(path)
+        inner = _es3_decrypt(original, pw) if pw else None
+        if inner is None:
+            raise ValueError("cannot re-encrypt: no Easy Save password for this file")
+        bom = b"\xef\xbb\xbf" if inner.startswith(b"\xef\xbb\xbf") else b""
+        text = bom + _es3_json(_collapse(data)).encode("utf-8")
+        enc = _es3_cipher(True, pw, original[:16], text)  # same IV: smallest diff
+        if enc is None:
+            raise ValueError("Easy Save encryption failed")
+        return original[:16] + enc
     if fmt == "rpgmv":
         s = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         lz = _game_lzstring(path) if path else None
@@ -1190,7 +1295,8 @@ def _walk(node, prefix="", hint=""):
         yield prefix, node, hint
 
 
-_TOK = re.compile(r"\[(\d+|\*)\]|\.?([^.\[\]]+)")
+# `["a key. with dots"]` quotes a key that contains dots or brackets
+_TOK = re.compile(r"\[(\d+|\*)\]|\[\"((?:[^\"\\]|\\.)*)\"\]|\.?([^.\[\]]+)")
 
 
 def _tokens(path: str) -> list:
@@ -1198,8 +1304,10 @@ def _tokens(path: str) -> list:
     for m in _TOK.finditer(path):
         if m.group(1) is not None:
             toks.append("*" if m.group(1) == "*" else int(m.group(1)))
+        elif m.group(2) is not None:
+            toks.append(json.loads('"' + m.group(2) + '"'))
         else:
-            toks.append(m.group(2))
+            toks.append(m.group(3))
     return toks
 
 
@@ -1314,6 +1422,8 @@ TOOLS = [
          inputSchema={"type": "object", "properties": {"path": {"type": "string"}, "query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["path"]}),
     Tool(name="patch_save", description="Set values in a save and re-encode it. edits: [{\"path\": \"party._gold\", \"value\": 99999999}]. '*' matches every array item/object key, e.g. 'party._items.*'. Backs up first and verifies.",
          inputSchema={"type": "object", "properties": {"path": {"type": "string"}, "edits": {"type": "array", "items": {"type": "object", "properties": {"path": {"type": "string"}, "value": {"type": ["number", "string", "boolean"], "description": "plain JSON value, e.g. 99999999 or true; never an object"}}, "required": ["path", "value"]}}}, "required": ["path", "edits"]}),
+    Tool(name="add_list_items", description="Append values to an existing list in a save, e.g. unlocked ids ('watchedEpisodeIds'). Skips values already in the list. Backs up first and verifies.",
+         inputSchema={"type": "object", "properties": {"path": {"type": "string"}, "list_path": {"type": "string", "description": "path of the list, e.g. watchedEpisodeIds"}, "values": {"type": "array", "items": {"type": ["number", "string", "boolean"]}}}, "required": ["path", "list_path", "values"]}),
     Tool(name="read_playerprefs", description="Unity games: list PlayerPrefs stored in the game's Wine registry (user.reg) as section: key = value (int|float|string). Optional regex query on key names.",
          inputSchema={"type": "object", "properties": {"game": {"type": "string"}, "query": {"type": "string"}}, "required": ["game"]}),
     Tool(name="set_playerprefs", description="Unity games: set PlayerPrefs values in user.reg. Keeps each key's type. create=true adds keys that do not exist yet. Refuses while Wine is running. Backs up and verifies.",
@@ -1382,9 +1492,9 @@ def _run(name: str, a: dict) -> str:
         if fmt == "binary":
             strings = re.findall(rb"[\x20-\x7e]{5,}", data)[:limit]
             return f"format=binary size={len(data)}; printable strings:\n" + "\n".join(s.decode() for s in strings if not q or q.search(s.decode()))
-        if fmt == "text":
+        if fmt in ("text", "es3-text"):
             lines = [l for l in data.splitlines() if not q or q.search(l)]
-            return _clip(f"format=text\n" + "\n".join(lines[:limit]))
+            return _clip(f"format={fmt}\n" + "\n".join(lines[:limit]))
         rows = [(k, v, h) for k, v, h in _walk(data) if not q or q.search(k) or (h and q.search(h))]
         body = "\n".join(f"{k} = {json.dumps(v, ensure_ascii=False)[:120]}" + (f"   # {h}" if h else "") for k, v, h in rows[:limit])
         return _clip(f"format={fmt} matches={len(rows)} (showing {min(limit, len(rows))})\n{body}")
@@ -1393,7 +1503,7 @@ def _run(name: str, a: dict) -> str:
         p = _save_path(a["path"])
         original = p.read_bytes()
         fmt, data = decode(p)
-        if fmt in ("binary", "text"):
+        if fmt in ("binary", "text", "es3-text"):
             return f"format={fmt}: use replace_in_text_save for text; binary needs a game-specific editor"
         changed = []
         for e in a["edits"]:
@@ -1410,6 +1520,40 @@ def _run(name: str, a: dict) -> str:
         lines = [f"{k}: {json.dumps(o)} -> {json.dumps(n)}" for k, o, n in changed[:60]]
         more = f"\n...and {len(changed) - 60} more" if len(changed) > 60 else ""
         return f"wrote {p} ({fmt}), backup {bak.name}, verified\n" + "\n".join(lines) + more
+
+    if name == "add_list_items":
+        p = _save_path(a["path"])
+        original = p.read_bytes()
+        fmt, data = decode(p)
+        if fmt in ("binary", "text", "es3-text"):
+            return f"format={fmt}: not a structured save"
+        node = data
+        for t in _tokens(a["list_path"]):
+            if t == "*" or not isinstance(node, (dict, list)):
+                return f"{a['list_path']}: no such list"
+            try:
+                node = node[int(t)] if isinstance(node, list) else node[t]
+            except (KeyError, IndexError, ValueError):
+                return f"{a['list_path']}: no such list"
+        if not isinstance(node, list):
+            return f"{a['list_path']} is not a list"
+        added = []
+        for v in a["values"]:
+            if node:
+                v = _coerce(node[0], v, a["list_path"])
+            if v not in node:
+                node.append(v)
+                added.append(v)
+        if not added:
+            return "all values already present; nothing written"
+        new = encode(fmt, data, original, p)
+        bak = _backup(p)
+        p.write_bytes(new)
+        fmt2, data2 = decode(p)
+        if fmt2 != fmt or data2 != data:
+            shutil.copy2(bak, p)
+            return "verification failed; original restored"
+        return f"wrote {p} ({fmt}), backup {bak.name}, verified\n{a['list_path']}: added {json.dumps(added, ensure_ascii=False)}"
 
     if name in ("read_playerprefs", "set_playerprefs"):
         r = _find_game(a["game"])
@@ -1443,6 +1587,23 @@ def _run(name: str, a: dict) -> str:
 
     if name == "replace_in_text_save":
         p = _save_path(a["path"])
+        original = p.read_bytes()
+        try:
+            fmt, data = decode(p)
+        except Exception:
+            fmt, data = "", None
+        if fmt == "es3-text":  # an Easy Save file that is not strict JSON: patch the decrypted text
+            new, n = re.subn(a["pattern"], a["replacement"], data, flags=re.M)
+            if n == 0:
+                return "pattern not found; nothing written"
+            bak = _backup(p)
+            p.write_bytes(encode("es3-text", new, original, p))
+            fmt2, data2 = decode(p)
+            if fmt2 != "es3-text" or data2 != new:
+                shutil.copy2(bak, p)
+                return "verification failed; original restored"
+            changed = [l for l in new.splitlines() if l not in data.splitlines()][:40]
+            return f"{n} replacements (es3-text), backup {bak.name}, verified\n" + "\n".join(changed)
         text = p.read_text(encoding="utf-8")
         new, n = re.subn(a["pattern"], a["replacement"], text, flags=re.M)
         if n == 0:

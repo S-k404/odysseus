@@ -20,19 +20,66 @@ from src.constants import GENERATED_IMAGES_DIR
 
 server = Server("image_gen")
 
+LOCAL_DEFAULT_SIZE = "512x512"
+_GPT_SIZES = {"1024x1024", "1024x1536", "1536x1024", "auto"}
+_DALLE_SIZES = {"1024x1024", "1024x1792", "1792x1024"}
+
+
+def pick_size(model_id: str, requested: str) -> str:
+    """The size to ask this model for. Cloud models take fixed sizes; a local diffusion model takes any
+    WxH (snapped to 64, 256 to 1024) and defaults to 512x512 like the chat's image mode, not 1024."""
+    leaf = (model_id or "").lower()
+    requested = (requested or "").strip().lower()
+    if "gpt-image" in leaf:
+        return requested if requested in _GPT_SIZES else "1024x1024"
+    if "dall-e" in leaf:
+        return requested if requested in _DALLE_SIZES else "1024x1024"
+    parts = requested.split("x")
+    if len(parts) == 2 and all(p.isdigit() for p in parts):
+        w, h = (max(256, min(int(p), 1024)) for p in parts)
+        return f"{round(w / 64) * 64}x{round(h / 64) * 64}"
+    return LOCAL_DEFAULT_SIZE
+
+
+def first_image_model(endpoints) -> str:
+    """The first image-generation model on a list of (pinned_models, cached_models) values, pinned first."""
+    import json
+    from src.image_model_ids import looks_like_image_generation_model
+    for pinned, cached in endpoints:
+        for raw in (pinned, cached):
+            try:
+                names = json.loads(raw) if isinstance(raw, str) and raw else (raw or [])
+            except Exception:
+                names = []
+            for name in names if isinstance(names, list) else []:
+                if looks_like_image_generation_model(str(name)):
+                    return str(name)
+    return ""
+
+
+def local_image_model() -> str:
+    """An image model on an enabled local image endpoint (e.g. stable-diffusion), or ''."""
+    from src.database import SessionLocal, ModelEndpoint
+    db = SessionLocal()
+    try:
+        rows = db.query(ModelEndpoint).filter(ModelEndpoint.is_enabled == True, ModelEndpoint.model_type == "image").all()  # noqa: E712
+        return first_image_model([(r.pinned_models, r.cached_models) for r in rows])
+    finally:
+        db.close()
+
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="generate_image",
-            description="Generate an image using an image-capable model (e.g. gpt-image-1)",
+            description="Generate an image with the local image model (e.g. stable-diffusion) or a configured cloud one. Local images are 512x512 by default and take about 20 seconds.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "prompt": {"type": "string", "description": "Image description prompt"},
                     "model": {"type": "string", "description": "Model name (auto-detects if omitted)"},
-                    "size": {"type": "string", "description": "Image size (default 1024x1024)"},
+                    "size": {"type": "string", "description": "WxH, e.g. 512x512 (default for local models) or 1024x1024"},
                     "quality": {"type": "string", "description": "Quality: low, medium, high, auto (default medium)"},
                 },
                 "required": ["prompt"],
@@ -48,7 +95,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     prompt = arguments.get("prompt", "")
     model_spec = arguments.get("model", "")
-    size = arguments.get("size", "1024x1024")
+    size = arguments.get("size", "")
     quality = arguments.get("quality", "medium")
 
     if not prompt:
@@ -69,7 +116,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if quality == "medium" and _settings.get("image_quality"):
             quality = _settings["image_quality"]
 
-        # Auto-detect best available image model
+        # Auto-detect: the local image model first (this app runs local models), then any configured cloud one.
+        if not model_spec:
+            model_spec = await asyncio.to_thread(local_image_model)
         if not model_spec:
             for candidate in ("gpt-image-1.5", "gpt-image-1", "dall-e-3"):
                 try:
@@ -79,7 +128,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 except ValueError:
                     continue
             if not model_spec:
-                return [TextContent(type="text", text="Error: No image model found. Configure one in Admin.")]
+                return [TextContent(type="text", text="Error: No image model found. Add a local image model (e.g. stable-diffusion) as an image endpoint, or configure one in Admin.")]
 
         try:
             url, model_id, headers = await asyncio.to_thread(_resolve_model, model_spec, model_type="image")
@@ -93,12 +142,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         base_url = url.replace("/chat/completions", "").replace("/v1/messages", "").rstrip("/")
         images_url = base_url + "/images/generations"
 
-        valid_gpt_sizes = {"1024x1024", "1024x1536", "1536x1024", "auto"}
-        valid_dalle3_sizes = {"1024x1024", "1024x1792", "1792x1024"}
-        if is_gpt_image and size not in valid_gpt_sizes:
-            size = "1024x1024"
-        elif not is_gpt_image and size not in valid_dalle3_sizes:
-            size = "1024x1024"
+        size = pick_size(model_id, size)
 
         payload = {"model": model_id, "prompt": prompt, "n": 1, "size": size}
         if is_gpt_image:

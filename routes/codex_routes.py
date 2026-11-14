@@ -35,6 +35,8 @@ CALENDAR_READ_SCOPES = {"calendar:read", "calendar:write"}
 CALENDAR_WRITE_SCOPES = {"calendar:write"}
 DOCS_READ_SCOPES = {"documents:read", "documents:write"}
 DOCS_WRITE_SCOPES = {"documents:write"}
+MCP_READ_SCOPES = {"mcp:read", "mcp:call"}
+MCP_CALL_SCOPES = {"mcp:call"}
 WRITE_ACTIONS = {"add", "create", "new", "save", "remind", "update", "delete", "toggle_item", "remove", "remove_item"}
 
 
@@ -124,6 +126,18 @@ def _require_cookbook_scope(request: Request, allowed: set[str]) -> str:
     return owner
 
 
+def _require_mcp_scope(request: Request, allowed: set[str]) -> str:
+    """Authorize a Codex MCP route.
+
+    API-token callers require the specified MCP scope(s).
+    Cookie-session callers additionally require admin privileges.
+    """
+    owner = _scope_owner(request, allowed)
+    if not getattr(request.state, "api_token", False):
+        require_admin(request)
+    return owner
+
+
 def _find_endpoint(router: APIRouter | None, method: str, path: str):
     if router is None:
         return None
@@ -150,6 +164,7 @@ def setup_codex_routes(
     memory_router: APIRouter | None = None,
     calendar_router: APIRouter | None = None,
     document_router: APIRouter | None = None,
+    mcp_manager: Any = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/codex", tags=["codex"])
     email_list_endpoint = _find_endpoint(email_router, "GET", "/api/email/list")
@@ -207,6 +222,12 @@ def setup_codex_routes(
                     "read": scoped(COOKBOOK_READ_SCOPES),
                     "launch": scoped(COOKBOOK_LAUNCH_SCOPES),
                     "actions": ["tasks", "servers", "output", "serve", "stop"],
+                },
+                "mcp": {
+                    "read": scoped(MCP_READ_SCOPES),
+                    "call": scoped(MCP_CALL_SCOPES),
+                    "actions": ["tools", "call"],
+                    "available": mcp_manager is not None,
                 },
             },
             "safety": {
@@ -875,6 +896,30 @@ def setup_codex_routes(
         except Exception as exc:
             raise HTTPException(500, f"state write failed: {exc}")
         return {"ok": True, "session_id": sess, "host": host or "local"}
+
+    @router.get("/mcp/tools")
+    def mcp_tools(request: Request):
+        _require_mcp_scope(request, MCP_READ_SCOPES)
+        if mcp_manager is None:
+            raise HTTPException(503, "MCP manager unavailable")
+        return {"tools": mcp_manager.get_all_tools()}
+
+    @router.post("/mcp/{server_id}/{tool_name}")
+    async def mcp_call_tool(
+        server_id: str,
+        tool_name: str,
+        request: Request,
+        payload: dict[str, Any] = Body(default_factory=dict),
+    ):
+        _require_mcp_scope(request, MCP_CALL_SCOPES)
+        if mcp_manager is None:
+            raise HTTPException(503, "MCP manager unavailable")
+        qualified_name = f"mcp__{server_id}__{tool_name}"
+        try:
+            result = await mcp_manager.call_tool(qualified_name, payload or {})
+            return result
+        except Exception as exc:
+            raise HTTPException(500, f"MCP tool execution failed: {exc}")
 
     return router
 

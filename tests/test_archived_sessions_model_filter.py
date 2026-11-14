@@ -30,7 +30,9 @@ _TS = sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False)
 
 
 def _route(router, path, method="GET"):
-    for r in router.routes:
+    # setup_session_routes() registers on a module-level router, so each call adds another
+    # copy of every route; use the most recent one, not a stale copy from an earlier test.
+    for r in reversed(router.routes):
         if r.path == path and method in getattr(r, "methods", set()):
             return r.endpoint
     raise AssertionError(f"route not found: {path}")

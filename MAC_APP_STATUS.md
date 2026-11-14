@@ -173,7 +173,7 @@ runner; no real model was touched)
   | qwen3-8b | 32k | 10 GB |
   | coder-1.5b | 32k | 2.4 GB |
 
-- The launchd watchdog (`com.myuser.llm-watchdog`) is a second safety net:
+- The launchd watchdog (`com.local.llm-watchdog`) is a second safety net:
   every 30 s it unloads all models if two big ones are resident or model
   memory passes 28 GB.
 
@@ -185,10 +185,21 @@ runner; no real model was touched)
   server stopped during startup": the old server takes about 5 s to close its MCP
   servers and still held the folder, so the new one refused to start. A server
   that is shutting down now marks its claim "stopping", and a new one waits up to
-  30 s for it (`InstanceLock.mark_stopping`). A server that is not stopping, such
+  40 s for it (`InstanceLock.mark_stopping`). A server that is not stopping, such
   as the Docker copy, is still refused at once. Reproduced on a scratch folder
   before the fix, and checked after it with a 6 s shutdown: the new server waited
   about 8 s, then started.
+- Instance lock now detects when a local Docker container has stopped using
+  `docker inspect`, releasing the claim immediately rather than waiting for
+  the 35-second heartbeat to expire.
+- Missing ports in claims now fallback gracefully to 7000 (Docker) or 7860
+  (native) instead of showing "port ?". `APP_PORT` is also explicitly passed
+  to Docker compose services.
+- `start-macos.sh` detects a running Docker Odysseus instance and stops it
+  cleanly before starting the native server.
+- The macOS app splash screen displays an interactive "Stop Docker & Retry"
+  (or "Retry") button on startup errors so users don't have to restart the app
+  manually from terminal.
 - The app now writes the server log in append mode. Before, the old and new
   server wrote at their own offsets and overwrote each other, which scrambled the
   log and hid the real error from the startup screen. This part needs the app
@@ -256,9 +267,10 @@ hosts, and the model runner guard and unload.
    gives the Claude Desktop colours and no background effect.
 
 ### Known gaps
-- ChromaDB, SearXNG and Speaches only run inside the Docker stack. While Docker
-  is off, the Mac app has no vector memory or document search, no SearXNG web
-  search, and no TTS/STT.
+- ChromaDB, SearXNG and Speaches run as Docker containers; the Mac app has no
+  copy of its own. While Docker is off, it has no vector memory or document
+  search, no SearXNG web search, and no TTS/STT. Settings → System → Services
+  says which one is missing.
 - With ChromaDB down, MCP tool choice is by words only, so a vague request
   ("look into that board") gets no MCP tool until it names one.
 - Branch history: this work is 509 commits behind upstream
@@ -268,10 +280,14 @@ hosts, and the model runner guard and unload.
 
 ## Future plans (in order)
 
-1. **Companion services without the full stack.** Start only
-   `chromadb searxng speaches` from compose, so the Mac app gets memory, search
-   and voice without the Docker Odysseus container. Show each one's status in
-   Settings.
+1. ~~**Companion services without the full stack.**~~ Done 2026-11-03. Start
+   only the companions with `docker compose up -d chromadb searxng speaches`
+   (`docker compose stop odysseus` if the Docker copy came back after a Docker
+   restart; an explicit stop sticks). Settings → System → **Services** shows
+   each one's status (`/api/diagnostics/services`, which now also probes
+   Speaches via TTS/STT_OPENAI_API_BASE). Checked with the Docker copy stopped:
+   memory, web search and voice all report Running. Not yet seen in the real
+   Mac app; it needs a restart to load the new Python.
 2. **Restart and check.** After relaunching, confirm memory and RAG connect, and
    see the startup error screen once by starting the app while the Docker copy
    runs.

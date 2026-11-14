@@ -3145,13 +3145,86 @@ function initLogsView() {
 }
 
 /* ═══════════════════════════════════════════
+   SERVICES STATUS (Settings → System)
+   ═══════════════════════════════════════════ */
+const SERVICE_LABELS = {
+  chromadb: 'Memory & documents (ChromaDB)',
+  searxng: 'Web search (SearXNG)',
+  speaches: 'Voice, TTS & STT (Speaches)',
+  ntfy: 'Notifications (ntfy)',
+  email: 'Email',
+  providers: 'Model endpoints',
+};
+const SERVICE_STATUS = {
+  ok: { text: 'Running', color: 'var(--green)' },
+  degraded: { text: 'Partly up', color: 'var(--warn)' },
+  down: { text: 'Down', color: 'var(--red)' },
+  disabled: { text: 'Off', color: 'var(--border)' },
+};
+const COMPANION_SERVICES = ['chromadb', 'searxng', 'speaches'];
+let servicesAbortController = null;
+
+function renderServices(services) {
+  const list = el('adm-servicesList');
+  if (!list) return;
+  list.textContent = '';
+  for (const svc of services) {
+    const st = SERVICE_STATUS[svc.status] || SERVICE_STATUS.down;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:grid;grid-template-columns:8px 18em 1fr;align-items:baseline;gap:8px;padding:5px 0;';
+    const dot = document.createElement('span');
+    dot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${st.color};`;
+    const name = document.createElement('span');
+    name.style.cssText = 'font-weight:600;';
+    name.textContent = SERVICE_LABELS[svc.name] || svc.name;
+    const detail = document.createElement('span');
+    detail.style.cssText = 'opacity:.7;';
+    detail.textContent = `${st.text}${svc.detail ? ' · ' + svc.detail : ''}`;
+    row.append(dot, name, detail);
+    list.appendChild(row);
+  }
+  const hint = el('adm-servicesHint');
+  if (hint) {
+    const missing = services.some(s => COMPANION_SERVICES.includes(s.name) && s.status === 'down');
+    hint.classList.toggle('hidden', !missing);
+  }
+}
+
+async function loadServices() {
+  const list = el('adm-servicesList');
+  if (!list) return;
+  if (servicesAbortController) servicesAbortController.abort();
+  servicesAbortController = new AbortController();
+  const { signal } = servicesAbortController;
+  try {
+    const res = await fetch('/api/diagnostics/services', { credentials: 'same-origin', signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderServices(Array.isArray(data.services) ? data.services : []);
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    list.textContent = `Could not check services: ${err.message}`;
+    list.style.color = 'var(--red)';
+    return;
+  } finally {
+    if (servicesAbortController?.signal === signal) servicesAbortController = null;
+  }
+  list.style.color = '';
+}
+
+function initServicesView() {
+  const btn = el('adm-servicesRefresh');
+  if (btn) btn.addEventListener('click', loadServices);
+}
+
+/* ═══════════════════════════════════════════
    INIT & REFRESH
    ═══════════════════════════════════════════ */
 function initAll() {
   modalEl = el('settings-modal');
   const inits = [
     initSignupToggle, initShareDefaultsToggle, initAddUser, initEndpointForm, initMcpForm,
-    initCalDAV, initBackup, initDangerZone, initTokenForm, initLogsView,
+    initCalDAV, initBackup, initDangerZone, initTokenForm, initLogsView, initServicesView,
     () => settingsModule.initIntegrations()
   ];
   for (const fn of inits) {
@@ -3168,6 +3241,7 @@ function refreshAll() {
   loadMcpServers();
   loadTokens();
   loadLogs(false);
+  loadServices();
 }
 
 /* ═══════════════════════════════════════════

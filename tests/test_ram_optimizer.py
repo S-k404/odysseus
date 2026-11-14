@@ -102,7 +102,7 @@ def test_free_ram_reports_what_was_unloaded_and_the_gain(monkeypatch):
     monkeypatch.setattr(ro, "_unload_decensor_model", decensor)
     snaps = _snapshots(34.0, 22.5, 22.5)
 
-    report = asyncio.run(ro.free_ram([URL], keep="qwen3.6", snapshot=snaps, apps=lambda: [], sleep=_no_sleep))
+    report = asyncio.run(ro.free_ram([URL], keep="qwen3.6", snapshot=snaps, apps=lambda: [], sleep=_no_sleep, stop_engine=lambda keep: None))
 
     assert seen["call"] == ([URL], "qwen3.6")
     assert report["steps"] == ["unloaded qwen3-8b", "unloaded qwen2.5:1.5b", "unloaded decensor model"]
@@ -135,7 +135,7 @@ def test_free_ram_waits_for_the_runner_to_hand_its_memory_back_before_measuring(
         slept.append(seconds)
 
     snaps = _snapshots(40.0, 39.9, 31.0, 21.5, 21.4)
-    report = asyncio.run(ro.free_ram([URL], snapshot=snaps, apps=lambda: [], sleep=sleep))
+    report = asyncio.run(ro.free_ram([URL], snapshot=snaps, apps=lambda: [], sleep=sleep, stop_engine=lambda keep: None))
 
     assert report["freed_gb"] == 18.6 and len(slept) == 3
 
@@ -153,7 +153,7 @@ def test_free_ram_does_not_wait_when_nothing_was_unloaded(monkeypatch):
     monkeypatch.setattr(ro, "release_local_models", release)
     monkeypatch.setattr(ro, "_unload_decensor_model", decensor)
 
-    report = asyncio.run(ro.free_ram([URL], snapshot=_snapshots(31.0), apps=lambda: [], sleep=sleep))
+    report = asyncio.run(ro.free_ram([URL], snapshot=_snapshots(31.0), apps=lambda: [], sleep=sleep, stop_engine=lambda keep: None))
 
     assert report["steps"] == [] and report["freed_gb"] == 0.0
 
@@ -180,7 +180,7 @@ def test_free_ram_says_so_when_a_reply_is_generating(monkeypatch):
     monkeypatch.setattr(ro, "release_local_models", release)
     monkeypatch.setattr(ro, "_unload_decensor_model", decensor)
 
-    report = asyncio.run(ro.free_ram([URL], snapshot=lambda: None, apps=lambda: []))
+    report = asyncio.run(ro.free_ram([URL], snapshot=lambda: None, apps=lambda: [], stop_engine=lambda keep: None))
 
     assert report["skipped"] == "busy" and report["steps"] == ["skipped model unload: a reply is generating"]
     assert report["freed_gb"] is None
@@ -256,3 +256,67 @@ def test_optimize_endpoint_frees_everything_but_the_model_the_user_is_moving_to(
 
     assert res.status_code == 200 and res.json() == {"steps": ["unloaded old"], "freed_gb": 9.4}
     assert calls["args"] == ([URL], "keep-me")
+
+
+# ---- stopping the Rapid-MLX engine (never the real one in tests) ---------------------------------------------------
+
+def _engine(tmp_path, command="/x/odysseus-mlx/.venv/bin/python /x/.venv/bin/rapid-mlx serve model", pid="4242"):
+    pidfile = tmp_path / "rapid-mlx.pid"
+    pidfile.write_text(pid)
+    killed = []
+    return pidfile, killed, dict(pidfile=str(pidfile), command_of=lambda p: command, kill=lambda p, sig: killed.append((p, sig)))
+
+
+def test_optimise_stops_the_engine_the_launcher_started(tmp_path):
+    import signal
+    pidfile, killed, kw = _engine(tmp_path)
+
+    assert ro.stop_rapid_mlx("", served=lambda: ["qwen3.6-35b-4bit"], **kw) == "unloaded the Rapid-MLX engine"
+    assert killed == [(4242, signal.SIGTERM)] and not pidfile.exists()
+
+
+def test_it_never_stops_an_engine_the_chat_is_using(tmp_path):
+    pidfile, killed, kw = _engine(tmp_path)
+
+    assert ro.stop_rapid_mlx("qwen3.6-35b-4bit", served=lambda: ["qwen3.6-35b-4bit"], **kw) is None
+    assert killed == [] and pidfile.exists()
+    # ...but it does stop it when the chat is on some other model
+    assert ro.stop_rapid_mlx("qwen3-8b", served=lambda: ["qwen3.6-35b-4bit"], **kw) == "unloaded the Rapid-MLX engine"
+
+
+def test_it_never_kills_a_process_that_is_not_rapid_mlx(tmp_path):
+    pidfile, killed, kw = _engine(tmp_path, command="/Applications/Safari.app/Contents/MacOS/Safari")  # a recycled pid
+
+    assert ro.stop_rapid_mlx("", served=lambda: [], **kw) is None
+    assert killed == []
+
+
+def test_no_pid_file_or_a_dead_process_is_a_quiet_no_op(tmp_path):
+    assert ro.stop_rapid_mlx("", pidfile=str(tmp_path / "missing.pid")) is None
+    (tmp_path / "bad.pid").write_text("not a number")
+    assert ro.stop_rapid_mlx("", pidfile=str(tmp_path / "bad.pid")) is None
+    pidfile, killed, kw = _engine(tmp_path)
+    kw["command_of"] = lambda p: ""  # ps found nothing: the process is gone
+    assert ro.stop_rapid_mlx("", served=lambda: [], **kw) is None and killed == []
+
+
+def test_free_ram_reports_the_engine_and_waits_for_its_memory_to_come_back(monkeypatch):
+    async def release(urls, keep=""):
+        return {"unloaded": []}
+
+    async def decensor():
+        return None
+
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(ro, "release_local_models", release)
+    monkeypatch.setattr(ro, "_unload_decensor_model", decensor)
+    seen = []
+    snaps = iter([_snap(30.0)] + [_snap(20.0)] * 20)
+    report = asyncio.run(ro.free_ram([URL], keep="m", snapshot=lambda: next(snaps), apps=lambda: [], sleep=sleep,
+                                     stop_engine=lambda keep: seen.append(keep) or "unloaded the Rapid-MLX engine"))
+    assert report["steps"] == ["unloaded the Rapid-MLX engine"] and seen == ["m"]
+    assert slept, "memory is only read after the engine's process has had time to exit"

@@ -44,3 +44,15 @@ export function optimiseSummary(report) {
   const apps = (r.suggestions || []).slice(0, 2).map(s => `${s.app} ${s.gb.toFixed(1)} GB`).join(', ');
   return `${freed}${free}.${apps ? ` Biggest other apps: ${apps}.` : ''}`;
 }
+
+// "Auto-switch models": before a message is sent, the server picks the model that fits it
+// (picture, plan, tools) and the chat switches to it. On by default; this remembers an opt-out.
+const AUTO_ROUTE_KEY = 'odysseus-auto-route';
+
+export function autoRouteEnabled() {
+  try { return localStorage.getItem(AUTO_ROUTE_KEY) !== '0'; } catch (_) { return true; }
+}
+
+export function setAutoRoute(on) {
+  try { localStorage.setItem(AUTO_ROUTE_KEY, on ? '1' : '0'); } catch (_) {}
+}

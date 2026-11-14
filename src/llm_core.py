@@ -401,6 +401,8 @@ _LOOP_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _LOOP_WINDOW = 40                # recent sentences compared
 _LOOP_MAX_DISTINCT = 12          # thinking: a full window with this few different sentences is a loop
 _LOOP_MAX_DISTINCT_ANSWER = 8    # answer text is held to a stricter line
+_LOOP_RECENT = 12                # tight loops ("I'll write the response." again and again) are caught within this many
+_LOOP_RECENT_REPEATS = 5         # ...when one sentence is this many of them
 # Loops whose sentences vary a little ("I'll mention `A.dll`", "I'll mention `B.dll`")
 # still compress far better than any real text. Measured over 4,157 windows of
 # code and docs: the most compressible was 0.171; synthetic loops were 0.04-0.12.
@@ -475,6 +477,11 @@ class _DegenerateStreamGuard:
 
     def _sentence_loop(self, st: dict, thinking: bool) -> Optional[str]:
         sentences = st["sentences"]
+        recent = sentences[-_LOOP_RECENT:]
+        if len(recent) == _LOOP_RECENT:
+            top_recent = max(set(recent), key=recent.count)
+            if len(top_recent) >= 15 and recent.count(top_recent) >= _LOOP_RECENT_REPEATS:
+                return f"'{top_recent[:40]}' repeated {recent.count(top_recent)} times in the last {_LOOP_RECENT} sentences"
         if len(sentences) < _LOOP_WINDOW:
             return None
         distinct = set(sentences)
@@ -1248,6 +1255,20 @@ def _apply_local_generation_stability(payload: Dict, url: str, model: str) -> No
     # endpoints. Keep simple chats from running forever when the model loops.
     if not payload.get("max_tokens") and not payload.get("max_completion_tokens"):
         payload["max_tokens"] = 2048
+
+
+# Thinking models on a local server loop in their reasoning far more often with no repetition penalty (the Qwen3
+# model cards recommend one for exactly this). A mild default, applied only where the request did not set its own.
+_LOCAL_THINKING_PRESENCE_PENALTY = 0.5
+
+
+def _apply_local_anti_loop(payload: Dict, url: str, model: str) -> None:
+    try:
+        local = is_local_endpoint(url) or _is_self_hosted_openai_compatible(url)
+    except Exception:
+        return
+    if local and _supports_thinking(model):
+        payload.setdefault("presence_penalty", _LOCAL_THINKING_PRESENCE_PENALTY)
 
 
 def _provider_headers(provider: str, headers: Optional[Dict] = None) -> Dict[str, str]:
@@ -2205,6 +2226,7 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
             payload[tok_key] = max_tokens
         _apply_local_generation_stability(payload, target_url, model)
+        _apply_local_anti_loop(payload, target_url, model)
         if provider == "mistral" and _supports_thinking(model):
             payload["reasoning_effort"] = _MISTRAL_REASONING_EFFORT
     try:
@@ -2572,6 +2594,7 @@ async def llm_call_async(
             payload["reasoning_effort"] = _MISTRAL_REASONING_EFFORT
         _apply_local_cache_affinity(payload, url, session_id)
         _apply_local_generation_stability(payload, target_url, model)
+        _apply_local_anti_loop(payload, target_url, model)
 
     if _is_host_dead(target_url):
         raise HTTPException(503, f"Upstream {_host_key(target_url)} marked unreachable (cooldown active)")
@@ -2862,6 +2885,7 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
             payload["think"] = False
         _apply_local_cache_affinity(payload, url, session_id)
         _apply_local_generation_stability(payload, target_url, model)
+        _apply_local_anti_loop(payload, target_url, model)
         _scrub_openai_chat_tool_reasoning(payload, target_url, model)
         h = _provider_headers(provider, headers)
         if provider == "copilot":

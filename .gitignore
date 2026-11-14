@@ -120,3 +120,6 @@ compound.config.json
 *.error.log
 _scratch/
 /odysseus/
+.mcp.json
+mcp_servers/*.pre-es3
+mcp_servers/*.bak-*

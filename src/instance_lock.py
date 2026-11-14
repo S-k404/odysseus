@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import socket
+import subprocess
 import time
 import uuid
 from typing import Optional
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 LOCK_NAME = ".server-instance.json"
 HEARTBEAT_SECONDS = 10.0
 STALE_AFTER_SECONDS = 35.0
-STOPPING_WAIT_SECONDS = 30.0
+STOPPING_WAIT_SECONDS = 40.0
 
 
 class DataDirInUse(RuntimeError):
@@ -57,21 +58,47 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _docker_container_alive(container_ref: str) -> bool:
+    """Check whether a local Docker container is running.
+    Returns False only if Docker confirmed the container exists locally and is not running."""
+    if not container_ref:
+        return True
+    try:
+        res = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", str(container_ref)],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        if res.returncode == 0:
+            return res.stdout.strip().lower() == "true"
+        # Container not found on local docker daemon (e.g. claim from another host);
+        # fail open so heartbeat age determines aliveness.
+        return True
+    except Exception:
+        return True
+
+
 def describe(claim: dict) -> str:
     where = "Docker container" if claim.get("runtime") == "docker" else "native server"
-    port = claim.get("port") or "?"
+    port = claim.get("port")
+    if not port or str(port) == "?":
+        port = "7000" if claim.get("runtime") == "docker" else "7860"
     return f"{where} on port {port} (pid {claim.get('pid')}, host {claim.get('host')})"
 
 
 class InstanceLock:
     def __init__(self, data_dir: str, port: Optional[str] = None):
         self.path = os.path.join(data_dir, LOCK_NAME)
+        resolved_port = port or os.environ.get("APP_PORT")
+        if not resolved_port:
+            resolved_port = "7000" if _runtime() == "docker" else "7860"
         self.claim = {
             "id": uuid.uuid4().hex,
             "pid": os.getpid(),
             "host": socket.gethostname(),
             "runtime": _runtime(),
-            "port": port,
+            "port": str(resolved_port),
         }
         self._task: Optional[asyncio.Task] = None
 
@@ -97,6 +124,11 @@ class InstanceLock:
         if current.get("host") == self.claim["host"]:
             pid = current.get("pid")
             if not isinstance(pid, int) or pid == self.claim["pid"] or not _pid_alive(pid):
+                return False
+        # When checking a Docker claim from a native server, check if the container is still running.
+        elif self.claim.get("runtime") == "native" and current.get("runtime") == "docker":
+            container_ref = current.get("host")
+            if container_ref and not _docker_container_alive(container_ref):
                 return False
         return True
 

@@ -131,3 +131,27 @@ def test_stopping_flag_is_written_and_kept_by_later_heartbeat_writes(tmp_path):
     lock._write()  # what the heartbeat does
 
     assert json.loads((tmp_path / il.LOCK_NAME).read_text())["stopping"] is True
+
+
+def test_default_port_resolution(tmp_path, monkeypatch):
+    monkeypatch.delenv("APP_PORT", raising=False)
+    lock = il.InstanceLock(str(tmp_path))
+    assert lock.claim["port"] in ("7860", "7000")
+
+    monkeypatch.setenv("APP_PORT", "9000")
+    lock2 = il.InstanceLock(str(tmp_path))
+    assert lock2.claim["port"] == "9000"
+
+
+def test_describe_fills_missing_port():
+    assert "port 7000" in il.describe({"runtime": "docker", "port": None, "pid": 1, "host": "c1"})
+    assert "port 7860" in il.describe({"runtime": "native", "port": "?", "pid": 12, "host": "mac"})
+
+
+def test_dead_docker_container_is_taken_over_immediately(tmp_path, monkeypatch):
+    _claim(tmp_path / il.LOCK_NAME, host="dead_container_id", runtime="docker", heartbeat=time.time())
+    monkeypatch.setattr(il, "_docker_container_alive", lambda ref: False)
+    lock = il.InstanceLock(str(tmp_path))
+    monkeypatch.setattr(lock, "claim", {**lock.claim, "runtime": "native"})
+    lock.acquire()
+    assert json.loads((tmp_path / il.LOCK_NAME).read_text())["id"] == lock.claim["id"]

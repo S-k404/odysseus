@@ -48,6 +48,16 @@ trap 'echo; echo "✗ Setup failed above. It is safe to re-run ./start-macos.sh.
 
 echo "▶ Odysseus quick start for macOS"
 
+# Free the data directory if a Docker Odysseus container is currently holding it.
+if command -v docker >/dev/null 2>&1; then
+    RUNNING_DOCKER_ODY="$(docker ps --filter "name=odysseus-odysseus" --filter "status=running" -q 2>/dev/null || true)"
+    if [ -n "$RUNNING_DOCKER_ODY" ]; then
+        echo "▶ Odysseus is currently running in Docker ($RUNNING_DOCKER_ODY)."
+        echo "  Stopping Docker copy so this native macOS server can claim the data folder..."
+        docker compose stop odysseus 2>/dev/null || docker stop "$RUNNING_DOCKER_ODY" 2>/dev/null || true
+    fi
+fi
+
 # Fail fast if the port is already taken (e.g. a previous run still running).
 if (exec 3<>"/dev/tcp/$PROBE_HOST/$PORT") 2>/dev/null; then
     echo "✗ Port $PORT is already in use on $PROBE_HOST. Stop what's using it, or pick another port:"

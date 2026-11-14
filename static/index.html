@@ -2632,6 +2632,14 @@
         <!-- ═══ SYSTEM TAB ═══ -->
         <div data-settings-panel="system" class="hidden">
 
+          <div class="admin-card" id="settings-system-services-card">
+            <h2>Services</h2>
+            <div class="admin-toggle-sub">Memory, web search, voice and the other things Odysseus talks to. Checked without sending anything.</div>
+            <div id="adm-servicesList" class="settings-services-list" aria-live="polite"></div>
+            <div id="adm-servicesHint" class="admin-toggle-sub hidden">Not running? Start just the companions: <code>docker compose up -d chromadb searxng speaches</code></div>
+            <div style="margin-top:8px"><button type="button" class="admin-btn-sm" id="adm-servicesRefresh">Check again</button></div>
+          </div>
+
           <div class="admin-card" id="settings-system-logs-card">
             <h2>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="settings-system-logs-svg">

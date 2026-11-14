@@ -26,7 +26,7 @@ server = Server("ece_inventory")
 # Candidates for Homebox directory
 HOMEBOX_DIR_CANDIDATES = [
     Path("/app/workspace/Homebox"),
-    (Path.home() / "Documents/Docker/Homebox"),
+    Path.home() / "Documents/Docker/Homebox",
     Path(__file__).resolve().parent.parent.parent / "Homebox",
 ]
 
@@ -45,15 +45,107 @@ _BOM_NOISE_TOKEN = re.compile(
 )
 
 
+# Homebox custom-field names (as the CSV import creates them) -> component keys.
+_DB_FIELD_KEYS = (
+    "value", "package", "voltage_rating", "tolerance", "datasheet_url", "supplier_part_no",
+)
+
+
+def _location_path(start_id: Optional[str], nodes: Dict[str, tuple]) -> str:
+    """Location names from the root down to ``start_id``, e.g. 'Lab / Cabinet A / Drawer 1'.
+
+    ``nodes`` maps entity id -> (name, parent_id, is_location). Non-location
+    ancestors (an item that holds other items) are walked through but not named.
+    """
+    names: List[str] = []
+    seen = set()
+    cur = start_id
+    while cur and cur in nodes and cur not in seen:
+        seen.add(cur)
+        name, parent_id, is_location = nodes[cur]
+        if is_location:
+            names.append(name)
+        cur = parent_id
+    return " / ".join(reversed(names))
+
+
+def _load_homebox_db(db_path: Path) -> List[Dict[str, Any]]:
+    """Items from Homebox's live SQLite DB (locations are rows too, so they are skipped).
+
+    Opened read-only: the file is shared with the running container, and a
+    read-write open from the host can remove its WAL/SHM files on close.
+    """
+    conn = sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT e.id, e.name, e.description, e.notes, e.quantity, e.model_number,
+                   e.manufacturer, e.import_ref, e.archived,
+                   e.entity_children AS parent_id,
+                   e.entity_location_entities AS location_id,
+                   t.is_location
+            FROM entities e JOIN entity_types t ON t.id = e.entity_type_entities
+        """).fetchall()
+        tags: Dict[str, List[str]] = {}
+        for r in conn.execute(
+            "SELECT te.entity_id, t.name FROM tag_entities te JOIN tags t ON t.id = te.tag_id ORDER BY t.name"
+        ):
+            tags.setdefault(r["entity_id"], []).append(r["name"])
+        fields: Dict[str, Dict[str, str]] = {}
+        for r in conn.execute("SELECT entity_fields AS entity_id, name, text_value, number_value FROM entity_fields"):
+            key = (r["name"] or "").strip().lower().replace(" ", "_")
+            if key in _DB_FIELD_KEYS:
+                text = r["text_value"] or (str(r["number_value"]) if r["number_value"] else "")
+                fields.setdefault(r["entity_id"], {})[key] = text.strip()
+    finally:
+        conn.close()
+
+    nodes = {r["id"]: (r["name"] or "", r["parent_id"], bool(r["is_location"])) for r in rows}
+    components = []
+    for row in rows:
+        if row["is_location"] or row["archived"]:
+            continue
+        extra = fields.get(row["id"], {})
+        components.append({
+            "import_ref": row["import_ref"] or row["id"],
+            "name": row["name"] or "",
+            "description": row["description"] or "",
+            "location": _location_path(row["location_id"] or row["parent_id"], nodes) or "Homebox Storage",
+            "tags": tags.get(row["id"], []),
+            "quantity": float(row["quantity"] or 0),
+            "manufacturer": row["manufacturer"] or "",
+            "model_number": row["model_number"] or "",
+            "notes": row["notes"] or "",
+            **{k: extra.get(k, "") for k in _DB_FIELD_KEYS},
+            "source": "homebox.db",
+        })
+    return components
+
+
 def _load_all_components() -> List[Dict[str, Any]]:
-    """Loads components from Homebox SQLite DB and/or ECE CSV import files."""
+    """Loads components from Homebox SQLite DB and/or ECE CSV import files.
+
+    The live Homebox DB wins: a CSV row is only used when no Homebox item
+    carries the same import ref, so stock edited in Homebox is never masked
+    by the seed CSV it was imported from.
+    """
     components = []
     seen_refs = set()
     hb_dir = _find_homebox_dir()
     if not hb_dir:
         return components
 
-    # 1. Load from CSV files in Homebox dir (e.g. ece_components_sample_import.csv)
+    # 1. Load from the Homebox SQLite database
+    db_path = hb_dir / "data" / "homebox.db"
+    if db_path.is_file():
+        try:
+            for comp in _load_homebox_db(db_path):
+                seen_refs.add(comp["import_ref"])
+                components.append(comp)
+        except Exception as exc:
+            print(f"ece_inventory: could not read {db_path}: {exc}", file=sys.stderr)
+
+    # 2. Load from CSV files in Homebox dir (e.g. ece_components_sample_import.csv)
     for csv_file in sorted(hb_dir.glob("*.csv")):
         try:
             with open(csv_file, mode="r", encoding="utf-8", errors="ignore") as f:
@@ -91,45 +183,6 @@ def _load_all_components() -> List[Dict[str, Any]]:
                         "supplier_part_no": row.get("HB.field.Supplier_Part_No", "").strip(),
                         "source": csv_file.name,
                     })
-        except Exception:
-            pass
-
-    # 2. Load from Homebox SQLite database
-    db_path = hb_dir / "data" / "homebox.db"
-    if db_path.is_file():
-        try:
-            conn = sqlite3.connect(str(db_path))
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT id, name, description, notes, quantity, model_number, manufacturer, import_ref
-                FROM entities
-                WHERE archived = 0 OR archived IS NULL
-            """)
-            for row in cur.fetchall():
-                ref = row["import_ref"] or row["id"]
-                if ref in seen_refs:
-                    continue
-                seen_refs.add(ref)
-                components.append({
-                    "import_ref": ref,
-                    "name": row["name"] or "",
-                    "description": row["description"] or "",
-                    "location": "Homebox Storage",
-                    "tags": [],
-                    "quantity": float(row["quantity"] or 0),
-                    "manufacturer": row["manufacturer"] or "",
-                    "model_number": row["model_number"] or "",
-                    "notes": row["notes"] or "",
-                    "value": "",
-                    "package": "",
-                    "voltage_rating": "",
-                    "tolerance": "",
-                    "datasheet_url": "",
-                    "supplier_part_no": "",
-                    "source": "homebox.db",
-                })
-            conn.close()
         except Exception:
             pass
 

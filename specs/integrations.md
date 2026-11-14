@@ -32,7 +32,8 @@ The SQLAlchemy `Integration` model exists in `core/database.py`, but current Set
 - memory list/add/delete;
 - calendar list/create/delete;
 - document list/read/create/delete;
-- Cookbook task/server/output/cached-model/preset/serve/adopt/stop controls.
+- Cookbook task/server/output/cached-model/preset/serve/adopt/stop controls;
+- MCP tool discovery and invocation through `/api/codex/mcp/tools` and `/api/codex/mcp/{server_id}/{tool_name}`.
 
 `_scope_owner()` owns scope checks and token-owner resolution. `_as_owner()` temporarily runs borrowed route handlers as the scoped owner and restores request state afterward. Borrowed email, memory, calendar, and document route handlers own their domain behavior; Codex routes only adapt them behind scoped access.
 

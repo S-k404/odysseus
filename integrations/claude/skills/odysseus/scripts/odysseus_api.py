@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small Odysseus scoped API helper for Codex terminal sessions."""
+"""Small Odysseus scoped API helper for Antigravity agent sessions."""
 
 from __future__ import annotations
 
@@ -31,6 +31,8 @@ def _usage() -> int:
     print("  odysseus_api.py cookbook preset NAME", file=sys.stderr)
     print("  odysseus_api.py cookbook adopt SESSION_ID MODEL [HOST] [PORT]", file=sys.stderr)
     print("  odysseus_api.py cookbook stop SESSION_ID", file=sys.stderr)
+    print("  odysseus_api.py mcp tools", file=sys.stderr)
+    print("  odysseus_api.py mcp call SERVER_ID TOOL_NAME [JSON_BODY]", file=sys.stderr)
     print("  odysseus_api.py METHOD /api/codex/path [json-body]", file=sys.stderr)
     return 2
 
@@ -44,7 +46,7 @@ def _config() -> tuple[str, str] | None:
     if not token:
         missing.append("ODYSSEUS_API_TOKEN")
     if missing:
-        print(f"missing {', '.join(missing)}; create a Codex Agent token in Odysseus Settings", file=sys.stderr)
+        print(f"missing {', '.join(missing)}; create an Antigravity Agent token in Odysseus Settings", file=sys.stderr)
         return None
     return base_url, token
 
@@ -166,6 +168,22 @@ def main() -> int:
             method = "POST"
             path = f"/api/codex/cookbook/stop/{sys.argv[3]}"
             body = None
+        else:
+            return _usage()
+    elif command == "mcp":
+        if len(sys.argv) < 3:
+            return _usage()
+        action = sys.argv[2].lower()
+        if action in ("tools", "list"):
+            method = "GET"
+            path = "/api/codex/mcp/tools"
+            body = None
+        elif action == "call" and len(sys.argv) >= 5:
+            server_id = sys.argv[3]
+            tool_name = sys.argv[4]
+            method = "POST"
+            path = f"/api/codex/mcp/{server_id}/{tool_name}"
+            body = sys.argv[5] if len(sys.argv) >= 6 else "{}"
         else:
             return _usage()
     else:

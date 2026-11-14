@@ -2073,8 +2073,8 @@ function initializeEventListeners() {
       btn.classList.toggle('active', !!active);
       btn.setAttribute('aria-pressed', String(!!active));
       btn.title = active
-        ? 'Plan mode on - next message proposes a plan only'
-        : 'Plan mode';
+        ? 'Plan mode on: the next message proposes a plan and nothing runs. Click or press Tab to turn it off.'
+        : 'Plan mode (Tab): the next message proposes a plan first; nothing runs until you approve it.';
     }
   }
 
@@ -2153,8 +2153,28 @@ function initializeEventListeners() {
 	    setMode(currentMode);
 	  })();
 
+  // The Plan pill in the composer toolbar, next to Thinking and Context. It is created here, so a page
+  // that lacks it (the restyled composer dropped it) still gets one; everything below wires it up.
+  function ensurePlanPill() {
+    let pill = el('plan-toggle-btn');
+    if (pill) return pill;
+    const anchor = el('context-mode-pill');
+    if (!anchor || !anchor.parentNode) return null;
+    pill = document.createElement('button');
+    pill.type = 'button';
+    pill.id = 'plan-toggle-btn';
+    pill.className = 'ody-composer-pill plan-pill';
+    pill.setAttribute('aria-pressed', 'false');
+    pill.setAttribute('aria-label', 'Plan mode');
+    pill.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/>'
+      + '<path d="M9 8h6M9 12h6M9 16h3"/></svg><span>Plan</span>';
+    anchor.insertAdjacentElement('afterend', pill);
+    return pill;
+  }
+
   (function initPlanToggle() {
-    const btn = el('plan-toggle-btn');
+    const btn = ensurePlanPill();
     const state = loadToggleState();
     syncPlanToggle(!!state.plan_mode);
     window.__odysseusSetPlanMode = (active) => setPlanMode(active, { silent: true });
