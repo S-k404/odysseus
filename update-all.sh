@@ -17,7 +17,8 @@
 #                   Dramatically cuts total download time compared to sequential pulls.
 #                   Skips buildable services and local-only images without spurious errors.
 #   5. Recreate    : Recreates RUNNING stacks with their new images:
-#                   - Odysseus: `docker compose up -d --build`
+#                   - Odysseus: `docker compose up -d --build` (only when `odysseus`
+#                     is already running; otherwise updates only running backing services)
 #                   - Immich: checks major-version safety (blocks v2 -> v3 unless --allow-major),
 #                     backs up PostgreSQL database via pg_dumpall, then `up -d`.
 #                   - All other running stacks: `docker compose up -d`.
@@ -40,7 +41,11 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-DOCKER_ROOT="$HOME/Documents/Docker"
+if [ -d "$HOME/Documents/Docker" ]; then
+  DOCKER_ROOT="$HOME/Documents/Docker"
+else
+  DOCKER_ROOT="$(dirname "$SCRIPT_DIR")"
+fi
 ODYSSEUS_DIR="$DOCKER_ROOT/Odysseus"
 MCP_SCRIPT_DIR="$DOCKER_ROOT/MCP Search Server"
 BACKUP_DIR="$DOCKER_ROOT/backups/immich"
@@ -138,6 +143,7 @@ if ! docker volume inspect speaches_speaches_cache >/dev/null 2>&1; then
   run docker volume create speaches_speaches_cache >/dev/null 2>&1 || true
 fi
 
+run_main() {
 # -------------------------------------------------- 2. Odysseus git pre-update
 if [ -d "$ODYSSEUS_DIR/.git" ]; then
   say "Odysseus: checking git repository"
@@ -156,23 +162,87 @@ fi
 #   PROJ_NAME | DIR | CONFIG_FILES_COMMA_SEPARATED | IS_RUNNING (1 or 0)
 say "Discovering Docker stacks and images"
 
-# Discovered compose projects map
-DISCOVERED_PROJECTS=""
-seen_dirs_lower=" "
+canon_dir() {
+  (cd "$1" 2>/dev/null && pwd -P)
+}
+
+has_env_compose_file() {
+  [ -f "$1/.env" ] && grep -qE '^[[:space:]]*COMPOSE_FILE=' "$1/.env" 2>/dev/null
+}
+
+has_default_compose_file() {
+  local d="$1"
+  [ -f "$d/compose.yaml" ] || [ -f "$d/compose.yml" ] || [ -f "$d/docker-compose.yaml" ] || [ -f "$d/docker-compose.yml" ]
+}
+
+compose_cmd_for_files() {
+  local files="$1"
+  local cmd="docker compose"
+  local f
+  local -a f_list
+  if [ -n "$files" ]; then
+    IFS=',' read -r -a f_list <<< "$files"
+    for f in "${f_list[@]}"; do
+      [ -n "$f" ] && cmd="$cmd -f '$f'"
+    done
+  fi
+  printf '%s' "$cmd"
+}
+
+normalize_image_ref() {
+  local img="$1"
+  img="${img#docker.io/}"
+  img="${img#library/}"
+  case "$img" in
+    *@*|*:*) ;;
+    *) img="${img}:latest" ;;
+  esac
+  printf '%s' "$img"
+}
+
+proj_count=0
+declare -a PROJ_NAMES PROJ_DIRS PROJ_DIRS_LC PROJ_FILES PROJ_RUN
+
+find_proj_idx() {
+  local target_dir_lc="$1"
+  local i
+  for ((i=0; i<proj_count; i++)); do
+    if [ "${PROJ_DIRS_LC[$i]}" = "$target_dir_lc" ]; then
+      printf '%s' "$i"
+      return 0
+    fi
+  done
+  return 1
+}
 
 # A. From active / existing containers (exact compose working dir & config files)
 while IFS='|' read -r c_proj c_dir c_files; do
   [ -z "$c_proj" ] || [ -z "$c_dir" ] && continue
   [ ! -d "$c_dir" ] && continue
 
-  dir_lc=$(printf '%s' "$c_dir" | tr '[:upper:]' '[:lower:]')
-  case "$seen_dirs_lower" in
-    *" $dir_lc "*) continue ;;
-  esac
-  seen_dirs_lower="${seen_dirs_lower}${dir_lc} "
+  c_dir_canon=$(canon_dir "$c_dir")
+  [ -z "$c_dir_canon" ] && continue
+  dir_lc=$(printf '%s' "$c_dir_canon" | tr '[:upper:]' '[:lower:]')
 
-  if is_skipped "$c_proj" || is_skipped "$(basename "$c_dir")"; then
+  if has_env_compose_file "$c_dir_canon"; then
+    c_files=""
+  fi
+
+  if idx=$(find_proj_idx "$dir_lc"); then
+    if [ -n "${PROJ_FILES[$idx]}" ] && [ ${#c_files} -gt ${#PROJ_FILES[$idx]} ]; then
+      PROJ_FILES[$idx]="$c_files"
+    fi
+    continue
+  fi
+
+  if is_skipped "$c_proj" || is_skipped "$(basename "$c_dir_canon")"; then
     warn "$c_proj: in SKIP_PROJECTS — skipped"
+    PROJ_DIRS_LC[$proj_count]="$dir_lc"
+    PROJ_NAMES[$proj_count]=""
+    PROJ_DIRS[$proj_count]="$c_dir_canon"
+    PROJ_FILES[$proj_count]=""
+    PROJ_RUN[$proj_count]=0
+    proj_count=$((proj_count + 1))
     continue
   fi
 
@@ -181,42 +251,69 @@ while IFS='|' read -r c_proj c_dir c_files; do
     is_running=1
   fi
 
-  DISCOVERED_PROJECTS="${DISCOVERED_PROJECTS}${c_proj}|${c_dir}|${c_files}|${is_running}
-"
+  PROJ_NAMES[$proj_count]="$c_proj"
+  PROJ_DIRS[$proj_count]="$c_dir_canon"
+  PROJ_DIRS_LC[$proj_count]="$dir_lc"
+  PROJ_FILES[$proj_count]="$c_files"
+  PROJ_RUN[$proj_count]="$is_running"
+  proj_count=$((proj_count + 1))
 done < <(docker ps -a --format '{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.project.working_dir"}}|{{.Label "com.docker.compose.project.config_files"}}' 2>/dev/null | sort -u)
 
 # B. From filesystem: scan for any compose files up to depth 4
 while IFS= read -r -d '' compose_file; do
   dir=$(dirname "$compose_file")
-  dir_lc=$(printf '%s' "$dir" | tr '[:upper:]' '[:lower:]')
+  dir_canon=$(canon_dir "$dir")
+  [ -z "$dir_canon" ] && continue
+  dir_lc=$(printf '%s' "$dir_canon" | tr '[:upper:]' '[:lower:]')
 
-  case "$seen_dirs_lower" in
-    *" $dir_lc "*) continue ;;
-  esac
-  seen_dirs_lower="${seen_dirs_lower}${dir_lc} "
+  if find_proj_idx "$dir_lc" >/dev/null; then
+    continue
+  fi
 
-  # Skip specialized VPS configurations or backup dirs
-  case "$dir" in
+  # Skip specialized VPS configurations, backup/MCP dirs, and compose overlays
+  case "$dir_canon" in
     *"/headscale/server"*) continue ;;
     *"$BACKUP_DIR"*) continue ;;
     *"$MCP_SCRIPT_DIR"*) continue ;;
   esac
+  case "$(basename "$compose_file")" in
+    *backup*|*.dev.yml|*.dev.yaml|*.gpu-*.yml|*.gpu-*.yaml|*.https.yml|*.tailscale.yml|*.sandbox.yml|host-docker.yml) continue ;;
+  esac
 
-  pname=$(basename "$dir")
+  pname=$(basename "$dir_canon")
   if is_skipped "$pname"; then
     warn "$pname: in SKIP_PROJECTS — skipped"
+    PROJ_DIRS_LC[$proj_count]="$dir_lc"
+    PROJ_NAMES[$proj_count]=""
+    PROJ_DIRS[$proj_count]="$dir_canon"
+    PROJ_FILES[$proj_count]=""
+    PROJ_RUN[$proj_count]=0
+    proj_count=$((proj_count + 1))
     continue
   fi
 
-  DISCOVERED_PROJECTS="${DISCOVERED_PROJECTS}${pname}|${dir}|${compose_file}|0
-"
-done < <(find "$DOCKER_ROOT" -mindepth 2 -maxdepth 4 \
-          \( -name "*compose*.yml" -o -name "*compose*.yaml" \) \
-          ! -path "*/.*/*" ! -path "*/backups/*" ! -path "*/cases/*" \
-          ! -path "*/data/*" ! -path "*/tests/*" ! -path "*/node_modules/*" \
-          ! -path "*/.venv/*" -print0 2>/dev/null)
+  c_files=""
+  if ! has_env_compose_file "$dir_canon" && ! has_default_compose_file "$dir_canon"; then
+    c_files="$compose_file"
+  fi
 
-DISCOVERED_PROJECTS=$(printf '%s\n' "$DISCOVERED_PROJECTS" | sed '/^$/d' | sort -t'|' -k1,1 -u)
+  PROJ_NAMES[$proj_count]="$pname"
+  PROJ_DIRS[$proj_count]="$dir_canon"
+  PROJ_DIRS_LC[$proj_count]="$dir_lc"
+  PROJ_FILES[$proj_count]="$c_files"
+  PROJ_RUN[$proj_count]=0
+  proj_count=$((proj_count + 1))
+done < <(find "$DOCKER_ROOT" -mindepth 1 -maxdepth 4 \
+          \( -type d \( -name ".*" -o -name "backups" -o -name "cases" -o -name "data" -o -name "library" -o -name "pgdata" -o -name "Magna" -o -name "runtime" -o -name "servers" -o -name "tests" -o -name "node_modules" -o -name ".venv" -o -name "__pycache__" \) -prune \) \
+          -o \( \( -type f -o -type l \) \( -name "*compose*.yml" -o -name "*compose*.yaml" \) -print0 \) 2>/dev/null)
+
+DISCOVERED_PROJECTS=""
+for ((i=0; i<proj_count; i++)); do
+  [ -z "${PROJ_NAMES[$i]}" ] && continue
+  DISCOVERED_PROJECTS="${DISCOVERED_PROJECTS}${PROJ_NAMES[$i]}|${PROJ_DIRS[$i]}|${PROJ_FILES[$i]}|${PROJ_RUN[$i]}
+"
+done
+DISCOVERED_PROJECTS=$(printf '%s\n' "$DISCOVERED_PROJECTS" | sed '/^$/d' | sort -t'|' -k1,1 -k2,2 -u)
 
 # C. Discover MCP Search Server images
 MCP_IMAGES=""
@@ -266,20 +363,11 @@ add_compose_task() {
   local dir="$2"
   local files="$3"
 
-  local -a f_args
-  f_args=()
-  IFS=',' read -r -a f_list <<< "$files"
-  for f in "${f_list[@]}"; do
-    [ -n "$f" ] && f_args+=("-f" "$f")
-  done
-
   TASK_TYPES[$task_count]="compose"
   TASK_LABELS[$task_count]="Stack: $name"
   TASK_DIRS[$task_count]="$dir"
-  local cmd="docker compose"
-  for f in "${f_list[@]}"; do
-    [ -n "$f" ] && cmd="$cmd -f '$f'"
-  done
+  local cmd
+  cmd=$(compose_cmd_for_files "$files")
   cmd="$cmd pull --ignore-buildable"
   TASK_CMDS[$task_count]="$cmd"
   task_count=$((task_count + 1))
@@ -296,10 +384,17 @@ add_image_task() {
   task_count=$((task_count + 1))
 }
 
-# 1. Add all compose projects to pull queue
+# 1. Add all compose projects to pull queue and collect their configured images
+COMPOSE_IMAGES_NL=""
 while IFS='|' read -r p_name p_dir p_files p_run; do
   [ -z "$p_name" ] && continue
   add_compose_task "$p_name" "$p_dir" "$p_files"
+  cfg_cmd=$(compose_cmd_for_files "$p_files")
+  while IFS= read -r c_img; do
+    [ -z "$c_img" ] && continue
+    COMPOSE_IMAGES_NL="${COMPOSE_IMAGES_NL}$(normalize_image_ref "$c_img")
+"
+  done < <(cd "$p_dir" 2>/dev/null && eval "$cfg_cmd config --images" 2>/dev/null)
 done < <(printf '%s\n' "$DISCOVERED_PROJECTS")
 
 # 2. Add MCP images
@@ -309,35 +404,39 @@ if [ -n "$MCP_IMAGES" ]; then
   done
 fi
 
-# 3. Add any standalone Docker images present locally
+# 3. Add any standalone / base Docker images present locally (including library & :latest images)
 all_local_images=$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -v '<none>' | sort -u)
 for loc_img in $all_local_images; do
   repo="${loc_img%:*}"
   tag="${loc_img##*:}"
-  
+
   [ "$tag" = "local" ] && continue
-  
+  case "$loc_img" in
+    *:local|odysseus-odysseus:*|better-vertsh-*|fileconverter-*|gods-eye-view:*|learnharness:*|notion-better-export-*|obsidian-couchdb:*|mcp/rea:*|notoma:*|ascii-dino*|mc-fakevps:*|*:test|*:test-*|*-test:*|*-test-*) continue ;;
+  esac
+
+  norm_img=$(normalize_image_ref "$loc_img")
+
   already_queued=0
   for m_img in $MCP_IMAGES; do
-    if [ "$m_img" = "$loc_img" ] || [ "$m_img" = "$repo" ]; then
+    if [ "$m_img" = "$loc_img" ] || [ "$m_img" = "$repo" ] || [ "$(normalize_image_ref "$m_img")" = "$norm_img" ]; then
       already_queued=1; break
     fi
   done
   [ "$already_queued" -eq 1 ] && continue
 
-  if [[ "$repo" =~ [/] ]]; then
-    is_in_queue=0
-    for ((k=0; k<task_count; k++)); do
-      if [ "${TASK_TYPES[$k]}" = "image" ] && [[ "${TASK_CMDS[$k]}" == *"$loc_img"* ]]; then
-        is_in_queue=1; break
-      fi
-    done
-    if [ "$is_in_queue" -eq 0 ]; then
-      case "$loc_img" in
-        odysseus-*|better-vertsh-*|ascii-dino*|obsidian-couchdb*|*test*) ;;
-        *) add_image_task "Image" "$loc_img" ;;
-      esac
+  if printf '%s\n' "$COMPOSE_IMAGES_NL" | grep -Fxq "$norm_img"; then
+    continue
+  fi
+
+  is_in_queue=0
+  for ((k=0; k<task_count; k++)); do
+    if [ "${TASK_TYPES[$k]}" = "image" ] && [[ "${TASK_CMDS[$k]}" == *"'$loc_img'"* ]]; then
+      is_in_queue=1; break
     fi
+  done
+  if [ "$is_in_queue" -eq 0 ]; then
+    add_image_task "Image" "$loc_img"
   fi
 done
 
@@ -429,12 +528,30 @@ say "Applying updates to running containers"
 
 # 1. Odysseus
 if [ -d "$ODYSSEUS_DIR" ] && ! is_skipped "odysseus"; then
-  if [ -n "$(docker ps --filter "label=com.docker.compose.project=odysseus" -q 2>/dev/null)" ]; then
-    say "Odysseus: rebuilding and restarting running stack"
-    (
-      cd "$ODYSSEUS_DIR" || exit 1
-      run docker compose up -d --build
-    ) || fail "Odysseus: compose up --build failed"
+  ody_running_svcs=()
+  while IFS= read -r svc; do
+    [ -n "$svc" ] && ody_running_svcs+=("$svc")
+  done < <(cd "$ODYSSEUS_DIR" 2>/dev/null && docker compose ps --status running --services 2>/dev/null)
+
+  if [ "${#ody_running_svcs[@]}" -gt 0 ]; then
+    ody_app_running=0
+    for svc in "${ody_running_svcs[@]}"; do
+      [ "$svc" = "odysseus" ] && ody_app_running=1 && break
+    done
+
+    if [ "$ody_app_running" -eq 1 ]; then
+      say "Odysseus: rebuilding and restarting running stack"
+      (
+        cd "$ODYSSEUS_DIR" || exit 1
+        run docker compose up -d --build
+      ) || fail "Odysseus: compose up --build failed"
+    else
+      say "Odysseus: updating running backing services only (keeping 'odysseus' stopped)"
+      (
+        cd "$ODYSSEUS_DIR" || exit 1
+        run docker compose up -d "${ody_running_svcs[@]}"
+      ) || fail "Odysseus: backing services update failed"
+    fi
   else
     info "Odysseus: not currently running (images fresh, left stopped)"
   fi
@@ -466,11 +583,7 @@ if [ -n "$immich_line" ]; then
         if [ "$DRY_RUN" -eq 1 ] || [ -s "$backup" ]; then
           ls -t "$BACKUP_DIR"/immich_db_*.sql.gz 2>/dev/null | tail -n +"$((KEEP_BACKUPS + 1))" | xargs rm -f 2>/dev/null
           
-          local_cmd="docker compose"
-          IFS=',' read -r -a im_flist <<< "$im_files"
-          for f in "${im_flist[@]}"; do
-            [ -n "$f" ] && local_cmd="$local_cmd -f '$f'"
-          done
+          local_cmd=$(compose_cmd_for_files "$im_files")
           local_cmd="$local_cmd up -d"
           echo "+ $local_cmd"
           if [ "$DRY_RUN" -eq 0 ]; then
@@ -496,11 +609,7 @@ while IFS='|' read -r p_name p_dir p_files p_run; do
 
   if [ "$p_run" -eq 1 ]; then
     say "Recreating running stack: $p_name ($p_dir)"
-    local_cmd="docker compose"
-    IFS=',' read -r -a p_flist <<< "$p_files"
-    for f in "${p_flist[@]}"; do
-      [ -n "$f" ] && local_cmd="$local_cmd -f '$f'"
-    done
+    local_cmd=$(compose_cmd_for_files "$p_files")
     local_cmd="$local_cmd up -d"
     echo "+ $local_cmd"
     if [ "$DRY_RUN" -eq 0 ]; then
@@ -573,3 +682,6 @@ else
   printf ' All done in %ds! Log saved to: %s\n' "$ELAPSED" "$LOG_FILE"
 fi
 echo "=================================================================="
+}
+
+run_main "$@"
